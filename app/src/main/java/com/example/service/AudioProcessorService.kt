@@ -5,11 +5,16 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
+import android.content.IntentFilter
+import android.media.audiofx.AudioEffect
+import android.media.audiofx.Equalizer
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Virtualizer
+import android.media.audiofx.PresetReverb
+import android.media.audiofx.Visualizer
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -25,17 +30,14 @@ import com.example.dsp.StereoWidener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * Android Foreground Service Kelas Profesional untuk Mengelola Engine Pemrosesan Audio (DSP)
- * agar terus berjalan di latar belakang secara stabil tanpa dibunuh oleh sistem Android.
- *
- * Menggunakan thread audio lari-tinggi independen untuk menghindari timbulnya jank/stutter
- * dan mengonsumsi memori minimal.
+ * Android Foreground Service untuk Mengelola Engine Pemrosesan Audio (DSP) System-Wide.
+ * Layanan ini memantau sinyal audio global Android (YouTube, Spotify, dsb)
+ * dan menerapkan Equalizer, Bass Boost, Virtualizer, dan Reverb secara real-time.
  */
 class AudioProcessorService : Service() {
 
@@ -49,18 +51,10 @@ class AudioProcessorService : Service() {
     private lateinit var repository: PresetRepository
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Engine DSP Audio
-    private var audioTrack: AudioTrack? = null
-    private var audioThread: Thread? = null
-    @Volatile private var isRunning = false
-
-    // Modul DSP (Bebas Alokasi Memori di Loop Inti)
-    val signalGenerator = AudioSignalGenerator()
+    // Backwards Compatibility / UI Dummies
+    val signalGenerator = AudioSignalGenerator() // Tetap dipertahankan agar tidak break UI references
     private val compressorLimiter = CompressorLimiter()
     private val stereoWidener = StereoWidener()
-    
-    // 31 Biquad Filters untuk Graphic EQ
-    private val filters = Array(31) { BiquadFilter() }
 
     // Frekuensi standar 31-Band ISO Equalizer Grafis (20Hz s.d. 20kHz)
     val eqFrequencies = floatArrayOf(
@@ -73,7 +67,7 @@ class AudioProcessorService : Service() {
     var bassBoostDb = 0f
         set(value) {
             field = value
-            updateFiltersConfig()
+            updateBassBoost()
         }
 
     // Live Metering data yang diekspos ke UI Compose pada 60FPS
@@ -100,34 +94,72 @@ class AudioProcessorService : Service() {
     private val _activePreset = MutableStateFlow<PresetEntity?>(null)
     val activePreset = _activePreset.asStateFlow()
 
+    // Pengelolaan Audio Effects Android secara global / dinamis per-Audio Session
+    private val activeEffects = java.util.concurrent.ConcurrentHashMap<Int, AudioEffectsGroup>()
+    private var globalVisualizer: Visualizer? = null
+    private var isReceiverRegistered = false
+
     companion object {
         private const val CHANNEL_ID = "bro_eq_channel_audio"
         private const val NOTIFICATION_ID = 1001
         
-        // Membuka akses statis mandiri yang aman agar UI bisa memantau
         var SERVICE_INSTANCE: AudioProcessorService? = null
             private set
+    }
+
+    // Broadcast Receiver untuk mendeteksi audio session dari aplikasi lain (YouTube, Spotify, dsb)
+    private val sessionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            val sessionId = intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1)
+            if (sessionId != -1 && sessionId != 0) {
+                if (action == AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION) {
+                    initEffectsForSession(sessionId)
+                } else if (action == AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION) {
+                    releaseEffectsForSession(sessionId)
+                }
+            }
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
         SERVICE_INSTANCE = this
         
+        // Atur agar signalGenerator dummy dianggap default true
+        signalGenerator.isPlaying = true
+
         // Inisialisasi Database
         val database = AudioDatabase.getDatabase(this)
         repository = PresetRepository(database.presetDao())
 
-        // Inisialisasi param kompresor
+        // Inisialisasi dummy compressor param
         compressorLimiter.init(44100f)
-
-        // Konfigurasi awal 31 filters
-        updateFiltersConfig()
 
         // Buat Notification Channel untuk Foreground Service
         createNotificationChannel()
 
-        // Jalankan audio loop di thread lari cepat khusus (Low-Latency)
-        startAudioProcessing()
+        // Daftarkan Broadcast Receiver untuk mengikat audio session dari YouTube / Spotify
+        try {
+            val filter = IntentFilter().apply {
+                addAction(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
+                addAction(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(sessionReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(sessionReceiver, filter)
+            }
+            isReceiverRegistered = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Terapkan efek global pada session 0 (Global Mix) secara default
+        initEffectsForSession(0)
+
+        // Mulai visualizer global
+        startGlobalVisualizer()
 
         // Ambil preset aktif awal dari database secara asinkron
         serviceScope.launch {
@@ -141,15 +173,28 @@ class AudioProcessorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        if (action == "TOGGLE_PLAYBACK") {
+        if (action == "TOGGLE_PLAYBACK" || action == "TOGGLE_ENGINE") {
             signalGenerator.isPlaying = !signalGenerator.isPlaying
+            // Terapkan keadaan aktif / nonaktif ke seluruh filter
+            for (group in activeEffects.values) {
+                group.setEnabled(signalGenerator.isPlaying)
+            }
+            if (signalGenerator.isPlaying) {
+                startGlobalVisualizer()
+            } else {
+                stopGlobalVisualizer()
+                _vuLeft.value = 0f
+                _vuRight.value = 0f
+                _clipLeft.value = false
+                _clipRight.value = false
+                _spectrumData.value = FloatArray(31) { 0f }
+            }
             updateNotification()
         }
         
         // Mulai foreground service dengan melempar sticky notification
         val notification = buildServiceNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ mewajibkan pendefinisian type MEDIA_PLAYBACK untuk audio player background
             startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
             startForeground(NOTIFICATION_ID, notification)
@@ -163,36 +208,262 @@ class AudioProcessorService : Service() {
     }
 
     override fun onDestroy() {
-        stopAudioProcessing()
-        serviceScope.cancel()
         SERVICE_INSTANCE = null
+        
+        if (isReceiverRegistered) {
+            try {
+                unregisterReceiver(sessionReceiver)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            isReceiverRegistered = false
+        }
+
+        stopGlobalVisualizer()
+
+        // Bebaskan seluruh session effects
+        val keys = activeEffects.keys().toList()
+        for (k in keys) {
+            releaseEffectsForSession(k)
+        }
+
+        serviceScope.cancel()
         super.onDestroy()
     }
 
     /**
-     * Memperbarui konfigurasi parameter semua filter Biquad EQ (31 Band + Subharmonic Bass).
+     * Menginisialisasi effects group untuk audio session tertentu secara aman.
      */
     @Synchronized
-    fun updateFiltersConfig() {
-        for (i in 0 until 31) {
-            val freq = eqFrequencies[i]
-            val originalGain = currentEqGains[i]
-            
-            // Subharmonic Bass Booster: Memberikan dorongan ekstra pada 3 frekuensi bass terbawah berjalan (20Hz s.d. 80Hz)
-            val bassBoostBonus = if (i <= 6) {
-                // Skala bonus meruncing dari 20Hz ke 80Hz
-                val weight = (7f - i) / 7f
-                bassBoostDb * weight
-            } else 0f
+    private fun initEffectsForSession(sessionId: Int) {
+        if (activeEffects.containsKey(sessionId)) return
 
-            val netGainDb = originalGain + bassBoostBonus
-            // Q = 1.41 (sekitar 1 oktaf lebar band demi visual equalizer grafis yang rapi)
-            filters[i].configurePeakingEQ(
-                centerFreq = freq,
-                bandwidthQ = 1.41f,
-                gainDb = netGainDb,
-                sampleRate = 44100f
-            )
+        var eq: Equalizer? = null
+        var bass: BassBoost? = null
+        var virt: Virtualizer? = null
+        var reverb: PresetReverb? = null
+
+        // Inisialisasi Equalizer HP
+        try {
+            eq = Equalizer(0, sessionId).apply {
+                enabled = signalGenerator.isPlaying
+            }
+            applyEqToEqualizer(eq)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Inisialisasi Bass Boost HP
+        try {
+            bass = BassBoost(0, sessionId).apply {
+                enabled = signalGenerator.isPlaying
+            }
+            applyBassToBassBoost(bass)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Inisialisasi Virtualizer (Stereo Widener) HP
+        try {
+            virt = Virtualizer(0, sessionId).apply {
+                enabled = signalGenerator.isPlaying
+            }
+            applyWidthToVirtualizer(virt)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Inisialisasi Preset Reverb HP
+        try {
+            reverb = PresetReverb(0, sessionId).apply {
+                enabled = signalGenerator.isPlaying
+            }
+            applyReverbToPresetReverb(reverb)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        activeEffects[sessionId] = AudioEffectsGroup(sessionId, eq, bass, virt, reverb)
+    }
+
+    /**
+     * Melepas effects group dari audio session tertentu.
+     */
+    @Synchronized
+    private fun releaseEffectsForSession(sessionId: Int) {
+        activeEffects.remove(sessionId)?.release()
+    }
+
+    /**
+     * Memulai visualizer global di session 0 untuk menangkap semua sound spektrum perangkat.
+     */
+    fun startGlobalVisualizer() {
+        if (globalVisualizer != null) return
+        try {
+            globalVisualizer = Visualizer(0).apply {
+                captureSize = Visualizer.getCaptureSizeRange()[1]
+                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
+                        if (waveform != null && signalGenerator.isPlaying) {
+                            var sum = 0f
+                            var maxVal = 0f
+                            for (b in waveform) {
+                                val v = (b.toInt() and 0xFF) - 128
+                                val normal = v / 128f
+                                sum += normal * normal
+                                if (abs(normal) > maxVal) maxVal = abs(normal)
+                            }
+                            val rms = sqrt(sum / waveform.size)
+                            _vuLeft.value = (rms * 2.2f).coerceIn(0f, 1f)
+                            _vuRight.value = (rms * 2.2f).coerceIn(0f, 1f)
+                            _clipLeft.value = maxVal >= 0.98f
+                            _clipRight.value = maxVal >= 0.98f
+                        } else {
+                            _vuLeft.value = 0f
+                            _vuRight.value = 0f
+                            _clipLeft.value = false
+                            _clipRight.value = false
+                        }
+                    }
+
+                    override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+                        if (fft != null && signalGenerator.isPlaying) {
+                            val n = fft.size
+                            val magnitudes = FloatArray(n / 2)
+                            magnitudes[0] = abs(fft[0].toFloat())
+                            for (i in 1 until n / 2) {
+                                val r = fft[2 * i].toFloat()
+                                val im = fft[2 * i + 1].toFloat()
+                                magnitudes[i] = sqrt(r * r + im * im)
+                            }
+
+                            val newSpectrum = FloatArray(31)
+                            for (valBand in 0 until 31) {
+                                val targetFreq = eqFrequencies[valBand]
+                                val targetBin = (targetFreq / (samplingRate / (2f * n) * 1000f)).toInt().coerceIn(0, magnitudes.size - 1)
+                                
+                                var acc = 0f
+                                var count = 0
+                                for (offset in -1..1) {
+                                    val idx = targetBin + offset
+                                    if (idx in magnitudes.indices) {
+                                        acc += magnitudes[idx]
+                                        count++
+                                    }
+                                }
+                                val energy = if (count > 0) acc / count else 0f
+                                newSpectrum[valBand] = (energy / 128f) * 14.0f
+                            }
+                            _spectrumData.value = newSpectrum
+                        } else {
+                            _spectrumData.value = FloatArray(31) { 0f }
+                        }
+                    }
+                }, Visualizer.getMaxCaptureRate() / 2, true, true)
+                enabled = true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun stopGlobalVisualizer() {
+        try {
+            globalVisualizer?.enabled = false
+            globalVisualizer?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        globalVisualizer = null
+    }
+
+    /**
+     * Memicu pembacaan izin visualizer ulang sewaktu aplikasi di-resume
+     */
+    fun checkAndStartVisualizer() {
+        if (signalGenerator.isPlaying) {
+            startGlobalVisualizer()
+        }
+    }
+
+    // Fungsi pemetaan setelan slider EQ ke Equalizer bawaan Android
+    private fun applyEqToEqualizer(equalizer: Equalizer) {
+        try {
+            val numBands = equalizer.numberOfBands.toInt()
+            val range = equalizer.bandLevelRange
+            val minLevel = range[0]
+            val maxLevel = range[1]
+
+            for (band in 0 until numBands) {
+                val centerFreqHz = equalizer.getCenterFreq(band.toShort()) / 1000f
+                
+                var closestIndex = 0
+                var minDiff = Float.MAX_VALUE
+                for (i in 0 until 31) {
+                    val diff = abs(eqFrequencies[i] - centerFreqHz)
+                    if (diff < minDiff) {
+                        minDiff = diff
+                        closestIndex = i
+                    }
+                }
+                
+                val gainDb = currentEqGains[closestIndex]
+                val levelMb = (gainDb * 100).toInt().coerceIn(minLevel.toInt(), maxLevel.toInt())
+                equalizer.setBandLevel(band.toShort(), levelMb.toShort())
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun applyBassToBassBoost(bassBoost: BassBoost) {
+        try {
+            if (bassBoost.strengthSupported) {
+                val strengthValue = (bassBoostDb / 15f * 1000f).toInt().coerceIn(0, 1000)
+                bassBoost.setStrength(strengthValue.toShort())
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun applyWidthToVirtualizer(virtualizer: Virtualizer) {
+        try {
+            if (virtualizer.strengthSupported) {
+                val widthValue = (stereoWidener.stereoWidth / 2f * 1000f).toInt().coerceIn(0, 1000)
+                virtualizer.setStrength(widthValue.toShort())
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun applyReverbToPresetReverb(presetReverb: PresetReverb) {
+        try {
+            val preset = when {
+                stereoWidener.reverbLevel <= 0.05f -> PresetReverb.PRESET_NONE
+                stereoWidener.reverbLevel <= 0.2f -> PresetReverb.PRESET_SMALLROOM
+                stereoWidener.reverbLevel <= 0.4f -> PresetReverb.PRESET_MEDIUMROOM
+                stereoWidener.reverbLevel <= 0.6f -> PresetReverb.PRESET_LARGEROOM
+                stereoWidener.reverbLevel <= 0.8f -> PresetReverb.PRESET_MEDIUMHALL
+                else -> PresetReverb.PRESET_LARGEHALL
+            }
+            presetReverb.preset = preset
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    @Synchronized
+    fun updateFiltersConfig() {
+        for (group in activeEffects.values) {
+            group.equalizer?.let { applyEqToEqualizer(it) }
+        }
+    }
+
+    private fun updateBassBoost() {
+        for (group in activeEffects.values) {
+            group.bassBoost?.let { applyBassToBassBoost(it) }
         }
     }
 
@@ -210,18 +481,28 @@ class AudioProcessorService : Service() {
             }
         }
 
-        // Terapkan Compressor
+        // Terapkan Compressor Dummies
         compressorLimiter.thresholdDb = preset.compThresholdDb
         compressorLimiter.ratio = preset.compRatio
         compressorLimiter.attackMs = preset.compAttackMs
         compressorLimiter.releaseMs = preset.compReleaseMs
         compressorLimiter.makeupGainDb = preset.compMakeupGainDb
-        compressorLimiter.recalculateCoefficients()
-
+        
         // Terapkan Widener & Bass & Reverb
         stereoWidener.stereoWidth = preset.stereoWidth
         stereoWidener.reverbLevel = preset.reverbLevel
-        bassBoostDb = preset.bassBoostDb // Ini otomatis memicu updateFiltersConfig()
+        bassBoostDb = preset.bassBoostDb // Ini otomatis memicu updateBassBoost()
+
+        // Pancing update filter equalizer
+        updateFiltersConfig()
+
+        // Perbarui semua live active effects kustom HP
+        for (group in activeEffects.values) {
+            group.equalizer?.let { applyEqToEqualizer(it) }
+            group.bassBoost?.let { applyBassToBassBoost(it) }
+            group.virtualizer?.let { applyWidthToVirtualizer(it) }
+            group.presetReverb?.let { applyReverbToPresetReverb(it) }
+        }
 
         updateNotification()
     }
@@ -261,10 +542,9 @@ class AudioProcessorService : Service() {
         return currentEqGains.clone()
     }
 
-    // Setters untuk parameter kompresor dan gema langsung dari slider UI
+    // Setters pelorot langsung dari slider UI
     fun updateCompressorThreshold(value: Float) {
         compressorLimiter.thresholdDb = value
-        compressorLimiter.recalculateCoefficients()
     }
 
     fun updateCompressorRatio(value: Float) {
@@ -273,12 +553,10 @@ class AudioProcessorService : Service() {
 
     fun updateCompressorAttack(value: Float) {
         compressorLimiter.attackMs = value
-        compressorLimiter.recalculateCoefficients()
     }
 
     fun updateCompressorRelease(value: Float) {
         compressorLimiter.releaseMs = value
-        compressorLimiter.recalculateCoefficients()
     }
 
     fun updateCompressorMakeup(value: Float) {
@@ -287,10 +565,16 @@ class AudioProcessorService : Service() {
 
     fun updateStereoWidth(value: Float) {
         stereoWidener.stereoWidth = value
+        for (group in activeEffects.values) {
+            group.virtualizer?.let { applyWidthToVirtualizer(it) }
+        }
     }
 
     fun updateReverbLevel(value: Float) {
         stereoWidener.reverbLevel = value
+        for (group in activeEffects.values) {
+            group.presetReverb?.let { applyReverbToPresetReverb(it) }
+        }
     }
 
     fun getCompressorThreshold() = compressorLimiter.thresholdDb
@@ -300,200 +584,6 @@ class AudioProcessorService : Service() {
     fun getCompressorMakeup() = compressorLimiter.makeupGainDb
     fun getStereoWidth() = stereoWidener.stereoWidth
     fun getReverbLevel() = stereoWidener.reverbLevel
-
-    /**
-     * Memulai Audio Engine Loop dengan prioritas thread real-time.
-     */
-    private fun startAudioProcessing() {
-        if (isRunning) return
-        isRunning = true
-
-        // Konfigurasi Buffer Size untuk AudioTrack (Menjaga latensi sekecil mungkin)
-        val sampleRate = 44100
-        val minBufferSize = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_STEREO,
-            AudioFormat.ENCODING_PCM_FLOAT
-        )
-        
-        // Ukuran ring buffer internal AudioTrack diperbesar dikit untuk cegah underflow
-        val bufferSize = max(minBufferSize, 4096 * 4)
-
-        try {
-            audioTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build()
-                )
-                .setBufferSizeInBytes(bufferSize)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // Fallback backward if builder fails on old platform
-            @Suppress("DEPRECATION")
-            audioTrack = AudioTrack(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build(),
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                    .build(),
-                bufferSize,
-                AudioTrack.MODE_STREAM,
-                android.media.AudioManager.AUDIO_SESSION_ID_GENERATE
-            )
-        }
-
-        audioTrack?.play()
-
-        // Loop Thread audio inti
-        audioThread = thread(start = true, name = "AudioEngineThread", priority = Thread.MAX_PRIORITY) {
-            val frameSize = 512 // Menulis audio dalam potongan/blok 512 sampel stereo (1024 floats)
-            val bufferToWrite = FloatArray(frameSize * 2)
-            
-            // Lokasi penampung DSP sementara (bebas alokasi GC)
-            val generatorPair = FloatArray(2)
-            val dspPair = FloatArray(2)
-            
-            // Variabel analisis level puncak VU
-            var peakLAccum = 0f
-            var peakRAccum = 0f
-            var rmsSquareSumL = 0f
-            var rmsSquareSumR = 0f
-            var accumulatedSampleCount = 0
-
-            // Penampung visualizer spectrum (smoothing filter)
-            val instantBandEnvelopes = FloatArray(31) { 0f }
-            val smoothingDown = 0.90f // Kecepatan peluruhan bar spectrum grafik (adem melandai)
-            val smoothingUp = 0.40f   // Responsifitas lonjakan bar spectrum
-
-            while (isRunning) {
-                if (!signalGenerator.isPlaying) {
-                    // Jika diam, tulis sampel nol agar tidak makan baterai, dan istirahat sejenak
-                    bufferToWrite.fill(0f)
-                    audioTrack?.write(bufferToWrite, 0, bufferToWrite.size, AudioTrack.WRITE_BLOCKING)
-                    
-                    // Reset meter visualizer
-                    _vuLeft.value = 0f
-                    _vuRight.value = 0f
-                    _clipLeft.value = false
-                    _clipRight.value = false
-                    _spectrumData.value = FloatArray(31) { 0f }
-                    
-                    Thread.sleep(30)
-                    continue
-                }
-
-                // Loop pemrosesan blok audio sampel per sampel
-                for (frame in 0 until frameSize) {
-                    // 1. Ambil sampel melodi meluncur dari Synthesizer
-                    signalGenerator.nextSample(generatorPair)
-                    var currentL = generatorPair[0]
-                    var currentR = generatorPair[1]
-
-                    // 2. Cascade Biquad Equalizer filters (Satu demi satu dari 31 band)
-                    for (b in 0 until 31) {
-                        currentL = filters[b].processLeft(currentL)
-                        currentR = filters[b].processRight(currentR)
-
-                        // Ambil tingkat energi band tersebut untuk spektrum grafik 60FPS
-                        val energy = (abs(currentL) + abs(currentR)) * 0.5f
-                        instantBandEnvelopes[b] = if (energy > instantBandEnvelopes[b]) {
-                            instantBandEnvelopes[b] + smoothingUp * (energy - instantBandEnvelopes[b])
-                        } else {
-                            instantBandEnvelopes[b] * smoothingDown
-                        }
-                    }
-
-                    // 3. Spasial 3D Reverb & Stereo Widener
-                    stereoWidener.process(currentL, currentR, dspPair)
-                    currentL = dspPair[0]
-                    currentR = dspPair[1]
-
-                    // 4. Master Dynamic Compressor & Limiter (Batas Aman 0dBFS)
-                    compressorLimiter.process(currentL, currentR, dspPair)
-                    currentL = dspPair[0]
-                    currentR = dspPair[1]
-
-                    // Tulis hasil akhir PCM FLOAT ke buffer AudioTrack
-                    bufferToWrite[frame * 2] = currentL
-                    bufferToWrite[frame * 2 + 1] = currentR
-
-                    // Akumulasikan level metering untuk meter VU L/R
-                    peakLAccum = max(peakLAccum, abs(currentL))
-                    peakRAccum = max(peakRAccum, abs(currentR))
-                    rmsSquareSumL += currentL * currentL
-                    rmsSquareSumR += currentR * currentR
-                    accumulatedSampleCount++
-                }
-
-                // Kirim audio hasil olahan ke speaker perangkat
-                audioTrack?.write(bufferToWrite, 0, bufferToWrite.size, AudioTrack.WRITE_BLOCKING)
-
-                // 5. Update level visualizer VU & Spectrum ke UI Flow (dilakukan berkala per-blok)
-                if (accumulatedSampleCount > 0) {
-                    val floatRmsL = sqrt(rmsSquareSumL / accumulatedSampleCount)
-                    val floatRmsR = sqrt(rmsSquareSumR / accumulatedSampleCount)
-
-                    // Kirim Envelope Level RMS termodifikasi ke flow visual
-                    _vuLeft.value = floatRmsL * 1.5f
-                    _vuRight.value = floatRmsR * 1.5f
-                    
-                    // Deteksi klip jika mendekati limit absolut 1.0f (0dB)
-                    _clipLeft.value = peakLAccum >= 0.98f
-                    _clipRight.value = peakRAccum >= 0.98f
-
-                    // Reset akumulator metering
-                    peakLAccum = 0f
-                    peakRAccum = 0f
-                    rmsSquareSumL = 0f
-                    rmsSquareSumR = 0f
-                    accumulatedSampleCount = 0
-
-                    // Kirim spektrum analyzer 31 bar yang selaras
-                    val currentSpectrum = _spectrumData.value.clone()
-                    for (b in 0 until 31) {
-                        // Perbesar dampak visual agar grafik spektrum neon tampak mantap melompat-lompat
-                        currentSpectrum[b] = instantBandEnvelopes[b] * 4.0f
-                    }
-                    _spectrumData.value = currentSpectrum
-                }
-            }
-        }
-    }
-
-    private fun stopAudioProcessing() {
-        isRunning = false
-        try {
-            audioThread?.join(500)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        audioThread = null
-
-        audioTrack?.apply {
-            try {
-                stop()
-                release()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        audioTrack = null
-    }
 
     /**
      * Memperbarui UI detail di bar notifikasi media style Android.
@@ -518,10 +608,10 @@ class AudioProcessorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val playIconChar = if (signalGenerator.isPlaying) "⏸" else "▶"
-        val statusText = if (signalGenerator.isPlaying) "Aktif - Presets: ${_activePresetName.value}" else "Berhenti sementara"
+        val isPlaying = signalGenerator.isPlaying
+        val playIconChar = if (isPlaying) "⏸" else "▶"
+        val statusText = if (isPlaying) "Equalizer Aktif - Presets: ${_activePresetName.value}" else "Equalizer Standby (Mati)"
 
-        // Buat Style Media Notification
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("BRO EQ JOSSS 🔊")
             .setContentText(statusText)
@@ -549,12 +639,35 @@ class AudioProcessorService : Service() {
                 "Layanan Pemrosesan Audio BRO EQ",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Saluran notifikasi untuk DSP Equalizer & Sound Generator yang terus berjalan stabil di latar belakang."
+                description = "Saluran notifikasi untuk DSP Equalizer global HP yang terus berjalan stabil di latar belakang."
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
+        }
+    }
+
+    // Kelas pembungkus untuk menampung seluruh efek aktif audio session
+    class AudioEffectsGroup(
+        val sessionId: Int,
+        val equalizer: Equalizer?,
+        val bassBoost: BassBoost?,
+        val virtualizer: Virtualizer?,
+        val presetReverb: PresetReverb?
+    ) {
+        fun setEnabled(enabled: Boolean) {
+            try { equalizer?.enabled = enabled } catch (e: Exception) {}
+            try { bassBoost?.enabled = enabled } catch (e: Exception) {}
+            try { virtualizer?.enabled = enabled } catch (e: Exception) {}
+            try { presetReverb?.enabled = enabled } catch (e: Exception) {}
+        }
+
+        fun release() {
+            try { equalizer?.release() } catch (e: Exception) {}
+            try { bassBoost?.release() } catch (e: Exception) {}
+            try { virtualizer?.release() } catch (e: Exception) {}
+            try { presetReverb?.release() } catch (e: Exception) {}
         }
     }
 }

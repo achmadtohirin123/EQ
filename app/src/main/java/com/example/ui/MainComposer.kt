@@ -115,14 +115,14 @@ fun AudioProcessorDashboard() {
 
     // Logika Request Perizinan Android (Sesuai Syarat No. 4 Metadata)
     val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+        arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
     } else {
-        emptyArray()
+        arrayOf(Manifest.permission.RECORD_AUDIO)
     }
 
     var permissionsGranted by remember {
         mutableStateOf(
-            permissionsToRequest.isEmpty() || permissionsToRequest.all {
+            permissionsToRequest.all {
                 ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
             }
         )
@@ -132,8 +132,10 @@ fun AudioProcessorDashboard() {
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         permissionsGranted = results.values.all { it }
-        if (!permissionsGranted && permissionsToRequest.isNotEmpty()) {
-            Toast.makeText(context, "Izin Notifikasi dibutuhkan untuk kontrol audio latar belakang!", Toast.LENGTH_LONG).show()
+        if (permissionsGranted) {
+            serviceInstance?.checkAndStartVisualizer()
+        } else {
+            Toast.makeText(context, "Izin Audio diperlukan untuk mengaktifkan spectrum visualizer!", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -228,9 +230,7 @@ fun AudioProcessorDashboard() {
                         )
                     }
                 }
-            }
-
-            // 2. INPUT DRAWER & MEDIA SYNTH PANEL (Mencegah Dead-End UI)
+            }            // 2. INPUT DRAWER & GLOBAL AUDIO FILTER PANEL
             GlassCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -244,29 +244,27 @@ fun AudioProcessorDashboard() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Filled.MusicNote, contentDescription = "Source", tint = AudioNeonCyan)
+                            Icon(Icons.Filled.SettingsInputHdmi, contentDescription = "Source", tint = AudioNeonCyan)
                             Text(
-                                text = "SINTESATOR AUDIO (DSP SOURCE)",
+                                text = "SUMBER INPUT: HP ANDROID",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = AudioTextPrimary
                             )
                         }
 
-                        // Tombol Play/Pause Utama (Gunting Kebosanan, Langsung Nyala)
+                        // Tombol ON/OFF EQ Bypass
                         Button(
                             onClick = {
                                 serviceInstance?.let { service ->
-                                    service.signalGenerator.isPlaying = !service.signalGenerator.isPlaying
-                                    // Picu onStartCommand update notification
                                     val triggerIntent = Intent(context, AudioProcessorService::class.java).apply {
-                                        action = "UPDATE_SERVICE"
+                                        action = "TOGGLE_PLAYBACK"
                                     }
                                     context.startService(triggerIntent)
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (serviceInstance?.signalGenerator?.isPlaying == true) AudioNeonMagenta else AudioNeonCyan,
+                                containerColor = if (serviceInstance?.signalGenerator?.isPlaying == true) AudioNeonGreen else AudioNeonMagenta,
                                 contentColor = Color.Black
                             ),
                             shape = RoundedCornerShape(12.dp),
@@ -276,89 +274,25 @@ fun AudioProcessorDashboard() {
                                 .testTag("btn_power_playback")
                         ) {
                             Icon(
-                                imageVector = if (serviceInstance?.signalGenerator?.isPlaying == true) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                                contentDescription = "Play/Pause Engine",
+                                imageVector = if (serviceInstance?.signalGenerator?.isPlaying == true) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
+                                contentDescription = "Toggle Equalizer Engine",
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (serviceInstance?.signalGenerator?.isPlaying == true) "MATIKAN" else "BUNYIKAN",
+                                text = if (serviceInstance?.signalGenerator?.isPlaying == true) "EQ AKTIF" else "EQ MATI",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
 
-                    // Tipe Gelombang Synthesizer
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val currentWave = serviceInstance?.signalGenerator?.waveform ?: AudioSignalGenerator.WaveformType.AMBIENT_BEAT
-                        
-                        AudioSignalGenerator.WaveformType.values().slice(0..2).forEach { wave ->
-                            WaveButton(
-                                name = getWaveName(wave),
-                                isSelected = currentWave == wave,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                serviceInstance?.signalGenerator?.waveform = wave
-                            }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val currentWave = serviceInstance?.signalGenerator?.waveform ?: AudioSignalGenerator.WaveformType.AMBIENT_BEAT
-                        
-                        AudioSignalGenerator.WaveformType.values().slice(3..5).forEach { wave ->
-                            WaveButton(
-                                name = getWaveName(wave),
-                                isSelected = currentWave == wave,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                serviceInstance?.signalGenerator?.waveform = wave
-                            }
-                        }
-                    }
-
-                    // Slider Pengendali Nada Frekuensi manual (Khusus SINE/SAW dll)
-                    val generatorFreq = serviceInstance?.signalGenerator?.frequency ?: 110f
-                    if (serviceInstance?.signalGenerator?.waveform != AudioSignalGenerator.WaveformType.AMBIENT_BEAT) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Text(
-                                text = "NADA: ${generatorFreq.toInt()}Hz",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = AudioTextSecondary,
-                                modifier = Modifier.width(75.dp)
-                            )
-                            Slider(
-                                value = generatorFreq,
-                                onValueChange = { serviceInstance?.signalGenerator?.frequency = it },
-                                valueRange = 40f..880f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = AudioNeonCyan,
-                                    activeTrackColor = AudioNeonCyan,
-                                    inactiveTrackColor = Color(0x33FFFFFF)
-                                ),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    } else {
-                        Text(
-                            text = "💡 Mode Melodi Ambient berjalan otomatis dengan ketukan bass gler & kecrek hit-hat.",
-                            fontSize = 11.sp,
-                            color = AudioTextSecondary,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                    Text(
+                        text = "Aplikasi akan memodifikasi suara perangkat secara global. Putar audio di aplikasi pihak ketiga seperti YouTube, Spotify, atau TikTok. Pengaturan Equalizer, Bass Boost, dan Reverb akan langsung berpengaruh secara real-time pada suara yang dihasilkan dari HP Anda!",
+                        fontSize = 11.sp,
+                        color = AudioTextSecondary,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
 
