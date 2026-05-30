@@ -26,6 +26,38 @@ data class PresetEntity(
     val stereoWidth: Float = 1.0f,
     val bassBoostDb: Float = 0.0f, // Subharmonic Bass Booster
     val reverbLevel: Float = 0.0f,
+
+    // Konfigurasi Digital Audio Crossover Realtime (4-Way Splitting: Sub, Low, Mid, High)
+    val crossoverSubLowHz: Float = 80f,
+    val crossoverLowMidHz: Float = 250f,
+    val crossoverMidHighHz: Float = 3500f,
+    
+    val crossoverSubGain: Float = 0f,
+    val crossoverLowGain: Float = 0f,
+    val crossoverMidGain: Float = 0f,
+    val crossoverHighGain: Float = 0f,
+    
+    val crossoverSubMute: Boolean = false,
+    val crossoverLowMute: Boolean = false,
+    val crossoverMidMute: Boolean = false,
+    val crossoverHighMute: Boolean = false,
+    
+    val crossoverSubSolo: Boolean = false,
+    val crossoverLowSolo: Boolean = false,
+    val crossoverMidSolo: Boolean = false,
+    val crossoverHighSolo: Boolean = false,
+    
+    val crossoverSubInvert: Boolean = false,
+    val crossoverLowInvert: Boolean = false,
+    val crossoverMidInvert: Boolean = false,
+    val crossoverHighInvert: Boolean = false,
+
+    // Konfigurasi Professional Audio Limiter (Batas Output Anti-Over)
+    val limiterThresholdDb: Float = 0f,
+    val limiterReleaseMs: Float = 100f,
+    val limiterCeilingDb: Float = -0.1f,
+    val limiterKneeDb: Float = 0f,
+    val isLimiterEnabled: Boolean = true,
     
     // Flag penanda apakah preset ini yang sedang dipilih
     val isSystemPreset: Boolean = false,

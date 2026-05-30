@@ -104,13 +104,19 @@ fun AudioProcessorDashboard() {
     val spectrumData by (serviceInstance?.spectrumData ?: MutableStateFlow(FloatArray(31) { 0f })).collectAsStateWithLifecycle()
     val isEngineActive by (serviceInstance?.isEnginePlaying ?: MutableStateFlow(true)).collectAsStateWithLifecycle()
 
+    val crossoverSubLevel by (serviceInstance?.crossoverSubLevel ?: MutableStateFlow(0f)).collectAsStateWithLifecycle()
+    val crossoverLowLevel by (serviceInstance?.crossoverLowLevel ?: MutableStateFlow(0f)).collectAsStateWithLifecycle()
+    val crossoverMidLevel by (serviceInstance?.crossoverMidLevel ?: MutableStateFlow(0f)).collectAsStateWithLifecycle()
+    val crossoverHighLevel by (serviceInstance?.crossoverHighLevel ?: MutableStateFlow(0f)).collectAsStateWithLifecycle()
+    val limiterGainReduction by (serviceInstance?.limiterGainReduction ?: MutableStateFlow(0f)).collectAsStateWithLifecycle()
+
     // Membaca Preset dari Database Room
     val database = remember { AudioDatabase.getDatabase(context) }
     val repository = remember { PresetRepository(database.presetDao()) }
     val presetList by repository.allPresets.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // State Editor Lokal
-    var selectedTab by remember { mutableStateOf(0) } // 0 = Equalizer, 1 = Compressor, 2 = Spasial FX
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Equalizer, 1 = Compressor, 2 = Spasial, 3 = Crossover, 4 = Limiter
     var showPresetDialog by remember { mutableStateOf(false) }
     var newPresetName by remember { mutableStateOf("") }
     var eqBandResolution by remember { mutableStateOf(1) } // 0 = 31 Band (Pro), 1 = 15 Band (Medium), 2 = 7 Band (Simpel)
@@ -129,6 +135,38 @@ fun AudioProcessorDashboard() {
     
     var localVolLeft by remember { mutableStateOf(1f) }
     var localVolRight by remember { mutableStateOf(1f) }
+
+    // Local Crossover State
+    var localCrossoverSubLowHz by remember { mutableStateOf(80f) }
+    var localCrossoverLowMidHz by remember { mutableStateOf(250f) }
+    var localCrossoverMidHighHz by remember { mutableStateOf(3500f) }
+    
+    var localCrossoverSubGain by remember { mutableStateOf(0f) }
+    var localCrossoverLowGain by remember { mutableStateOf(0f) }
+    var localCrossoverMidGain by remember { mutableStateOf(0f) }
+    var localCrossoverHighGain by remember { mutableStateOf(0f) }
+    
+    var localCrossoverSubMute by remember { mutableStateOf(false) }
+    var localCrossoverLowMute by remember { mutableStateOf(false) }
+    var localCrossoverMidMute by remember { mutableStateOf(false) }
+    var localCrossoverHighMute by remember { mutableStateOf(false) }
+    
+    var localCrossoverSubSolo by remember { mutableStateOf(false) }
+    var localCrossoverLowSolo by remember { mutableStateOf(false) }
+    var localCrossoverMidSolo by remember { mutableStateOf(false) }
+    var localCrossoverHighSolo by remember { mutableStateOf(false) }
+    
+    var localCrossoverSubInvert by remember { mutableStateOf(false) }
+    var localCrossoverLowInvert by remember { mutableStateOf(false) }
+    var localCrossoverMidInvert by remember { mutableStateOf(false) }
+    var localCrossoverHighInvert by remember { mutableStateOf(false) }
+
+    // Local Limiter State
+    var localLimiterThresholdDb by remember { mutableStateOf(0f) }
+    var localLimiterReleaseMs by remember { mutableStateOf(100f) }
+    var localLimiterCeilingDb by remember { mutableStateOf(-0.1f) }
+    var localLimiterKneeDb by remember { mutableStateOf(0f) }
+    var localIsLimiterEnabled by remember { mutableStateOf(true) }
 
     // State Menu Settings Global
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -155,6 +193,38 @@ fun AudioProcessorDashboard() {
             localReverbLevel = service.getReverbLevel()
             localVolLeft = service.volumeLeft
             localVolRight = service.volumeRight
+
+            // Sync Crossover
+            localCrossoverSubLowHz = service.crossoverSubLowHz
+            localCrossoverLowMidHz = service.crossoverLowMidHz
+            localCrossoverMidHighHz = service.crossoverMidHighHz
+            
+            localCrossoverSubGain = service.crossoverSubGain
+            localCrossoverLowGain = service.crossoverLowGain
+            localCrossoverMidGain = service.crossoverMidGain
+            localCrossoverHighGain = service.crossoverHighGain
+            
+            localCrossoverSubMute = service.crossoverSubMute
+            localCrossoverLowMute = service.crossoverLowMute
+            localCrossoverMidMute = service.crossoverMidMute
+            localCrossoverHighMute = service.crossoverHighMute
+            
+            localCrossoverSubSolo = service.crossoverSubSolo
+            localCrossoverLowSolo = service.crossoverLowSolo
+            localCrossoverMidSolo = service.crossoverMidSolo
+            localCrossoverHighSolo = service.crossoverHighSolo
+            
+            localCrossoverSubInvert = service.crossoverSubInvert
+            localCrossoverLowInvert = service.crossoverLowInvert
+            localCrossoverMidInvert = service.crossoverMidInvert
+            localCrossoverHighInvert = service.crossoverHighInvert
+
+            // Sync Limiter
+            localLimiterThresholdDb = service.limiterThresholdDb
+            localLimiterReleaseMs = service.limiterReleaseMs
+            localLimiterCeilingDb = service.limiterCeilingDb
+            localLimiterKneeDb = service.limiterKneeDb
+            localIsLimiterEnabled = service.isLimiterEnabled
         }
     }
 
@@ -820,17 +890,27 @@ fun AudioProcessorDashboard() {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("31 BAND EQ", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    text = { Text("EQ GRAFIS", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("KOMPRESOR", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    text = { Text("COMPRESSOR", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
                 )
                 Tab(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    text = { Text("EFEK SPASIAL", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    text = { Text("SPASIAL FX", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+                )
+                Tab(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    text = { Text("CROSSOVER", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+                )
+                Tab(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
+                    text = { Text("LIMITER PRO", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
                 )
             }
 
@@ -1042,6 +1122,388 @@ fun AudioProcessorDashboard() {
                                 onValueChange = {
                                     localReverbLevel = it
                                     serviceInstance?.updateReverbLevel(it)
+                                }
+                            )
+                        }
+                    }
+                }
+                3 -> {
+                    // TAB DIGITAL CROSSOVER (SUB, LOW, MID, HIGH)
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "REAL-TIME 4-WAY DIGITAL ELECTRONIC CROSSOVER",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = AudioNeonAmber
+                            )
+
+                            // 1. Cutoff Frequencies Selectors
+                            GlassCard(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("FREKUENSI PEMBAGIAN (CUTOFF POINTS)", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = AudioNeonCyan)
+                                    
+                                    DoubleSliderWidget(
+                                        label = "Sub ⇄ Low Cutoff",
+                                        valueText = String.format("%.0f Hz", localCrossoverSubLowHz),
+                                        value = localCrossoverSubLowHz,
+                                        valueRange = 40f..150f,
+                                        onValueChange = {
+                                            localCrossoverSubLowHz = it
+                                            serviceInstance?.crossoverSubLowHz = it
+                                        }
+                                    )
+                                    
+                                    DoubleSliderWidget(
+                                        label = "Low ⇄ Mid Cutoff",
+                                        valueText = String.format("%.0f Hz", localCrossoverLowMidHz),
+                                        value = localCrossoverLowMidHz,
+                                        valueRange = 150f..1000f,
+                                        onValueChange = {
+                                            localCrossoverLowMidHz = it
+                                            serviceInstance?.crossoverLowMidHz = it
+                                        }
+                                    )
+                                    
+                                    DoubleSliderWidget(
+                                        label = "Mid ⇄ High Cutoff",
+                                        valueText = if (localCrossoverMidHighHz >= 1000f) String.format("%.1f kHz", localCrossoverMidHighHz / 1000f) else String.format("%.0f Hz", localCrossoverMidHighHz),
+                                        value = localCrossoverMidHighHz,
+                                        valueRange = 1000f..8000f,
+                                        onValueChange = {
+                                            localCrossoverMidHighHz = it
+                                            serviceInstance?.crossoverMidHighHz = it
+                                        }
+                                    )
+                                }
+                            }
+
+                            // 2. 4-Way Outputs Row (Sub, Low, Mid, High)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                val bands = listOf(
+                                    CrossoverBandItem("SUB 🔊", crossoverSubLevel, localCrossoverSubGain, localCrossoverSubMute, localCrossoverSubSolo, localCrossoverSubInvert, AudioNeonRed,
+                                        onGainChange = { localCrossoverSubGain = it; serviceInstance?.crossoverSubGain = it },
+                                        onMuteChange = { localCrossoverSubMute = it; serviceInstance?.crossoverSubMute = it },
+                                        onSoloChange = { localCrossoverSubSolo = it; serviceInstance?.crossoverSubSolo = it },
+                                        onInvertChange = { localCrossoverSubInvert = it; serviceInstance?.crossoverSubInvert = it }
+                                    ),
+                                    CrossoverBandItem("LOW 🎸", crossoverLowLevel, localCrossoverLowGain, localCrossoverLowMute, localCrossoverLowSolo, localCrossoverLowInvert, AudioNeonAmber,
+                                        onGainChange = { localCrossoverLowGain = it; serviceInstance?.crossoverLowGain = it },
+                                        onMuteChange = { localCrossoverLowMute = it; serviceInstance?.crossoverLowMute = it },
+                                        onSoloChange = { localCrossoverLowSolo = it; serviceInstance?.crossoverLowSolo = it },
+                                        onInvertChange = { localCrossoverLowInvert = it; serviceInstance?.crossoverLowInvert = it }
+                                    ),
+                                    CrossoverBandItem("MID 🎤", crossoverMidLevel, localCrossoverMidGain, localCrossoverMidMute, localCrossoverMidSolo, localCrossoverMidInvert, AudioNeonGreen,
+                                        onGainChange = { localCrossoverMidGain = it; serviceInstance?.crossoverMidGain = it },
+                                        onMuteChange = { localCrossoverMidMute = it; serviceInstance?.crossoverMidMute = it },
+                                        onSoloChange = { localCrossoverMidSolo = it; serviceInstance?.crossoverMidSolo = it },
+                                        onInvertChange = { localCrossoverMidInvert = it; serviceInstance?.crossoverMidInvert = it }
+                                    ),
+                                    CrossoverBandItem("HIGH 🔔", crossoverHighLevel, localCrossoverHighGain, localCrossoverHighMute, localCrossoverHighSolo, localCrossoverHighInvert, AudioNeonCyan,
+                                        onGainChange = { localCrossoverHighGain = it; serviceInstance?.crossoverHighGain = it },
+                                        onMuteChange = { localCrossoverHighMute = it; serviceInstance?.crossoverHighMute = it },
+                                        onSoloChange = { localCrossoverHighSolo = it; serviceInstance?.crossoverHighSolo = it },
+                                        onInvertChange = { localCrossoverHighInvert = it; serviceInstance?.crossoverHighInvert = it }
+                                    )
+                                )
+
+                                bands.forEach { band ->
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(band.name, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, color = band.accentColor)
+                                        
+                                        // 1. Beautiful vertical LED VU Meter with neon feedback!
+                                        Box(
+                                            modifier = Modifier
+                                                .width(14.dp)
+                                                .height(84.dp)
+                                                .background(Color(0xFF0F101A), shape = RoundedCornerShape(2.dp))
+                                                .padding(2.dp)
+                                        ) {
+                                            Column(
+                                                verticalArrangement = Arrangement.spacedBy(1.dp),
+                                                modifier = Modifier.fillMaxSize()
+                                            ) {
+                                                for (segment in 12 downTo 1) {
+                                                    val fractionThreshold = segment.toFloat() / 12f
+                                                    val isLit = band.level >= fractionThreshold
+                                                    val segmentColor = if (isLit) {
+                                                        if (segment >= 11) Color.Red else if (segment >= 9) AudioNeonAmber else band.accentColor
+                                                    } else {
+                                                        Color(0x12FFFFFF)
+                                                    }
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .weight(1f)
+                                                            .background(segmentColor, shape = RoundedCornerShape(0.5.dp))
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Text(
+                                            text = if (band.level > 0.01f) String.format("%.0f%%", band.level * 100f) else "SILENT",
+                                            fontSize = 7.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = AudioTextSecondary,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+
+                                        // Mini Gain Sliders
+                                        Box(
+                                            modifier = Modifier.height(72.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Slider(
+                                                value = band.gain,
+                                                onValueChange = band.onGainChange,
+                                                valueRange = -12f..12f,
+                                                modifier = Modifier
+                                                    .graphicsLayer {
+                                                        rotationZ = -90f
+                                                        transformOrigin = TransformOrigin(0.5f, 0.5f)
+                                                    }
+                                                    .width(72.dp),
+                                                colors = SliderDefaults.colors(
+                                                    thumbColor = band.accentColor,
+                                                    activeTrackColor = band.accentColor,
+                                                    inactiveTrackColor = Color(0x13FFFFFF)
+                                                )
+                                            )
+                                        }
+                                        
+                                        Text(String.format("%+.1f dB", band.gain), fontSize = 7.sp, color = Color.White, fontFamily = FontFamily.Monospace)
+
+                                        // Mute, Solo, Phase buttons
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            // Mute Button
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(18.dp)
+                                                    .background(
+                                                        color = if (band.isMuted) Color(0x3DFF3B30) else Color(0x0A000000),
+                                                        shape = RoundedCornerShape(2.dp)
+                                                    )
+                                                    .border(
+                                                        width = 1.dp,
+                                                        color = if (band.isMuted) Color.Red else Color(0x1FFFFFFF),
+                                                        shape = RoundedCornerShape(2.dp)
+                                                    )
+                                                    .clickable { band.onMuteChange(!band.isMuted) },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("M", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = if (band.isMuted) Color.Red else Color.Gray)
+                                            }
+
+                                            // Solo Button
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(18.dp)
+                                                    .background(
+                                                        color = if (band.isSolo) Color(0x3DFF9500) else Color(0x0A000000),
+                                                        shape = RoundedCornerShape(2.dp)
+                                                    )
+                                                    .border(
+                                                        width = 1.dp,
+                                                        color = if (band.isSolo) AudioNeonAmber else Color(0x1FFFFFFF),
+                                                        shape = RoundedCornerShape(2.dp)
+                                                    )
+                                                    .clickable { band.onSoloChange(!band.isSolo) },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("S", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = if (band.isSolo) AudioNeonAmber else Color.Gray)
+                                            }
+
+                                            // Phase Button
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(18.dp)
+                                                    .background(
+                                                        color = if (band.isInverted) Color(0x3D30D5C8) else Color(0x0A000000),
+                                                        shape = RoundedCornerShape(2.dp)
+                                                    )
+                                                    .border(
+                                                        width = 1.dp,
+                                                        color = if (band.isInverted) AudioNeonCyan else Color(0x1FFFFFFF),
+                                                        shape = RoundedCornerShape(2.dp)
+                                                    )
+                                                    .clickable { band.onInvertChange(!band.isInverted) },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("∅", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = if (band.isInverted) AudioNeonCyan else Color.Gray)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                4 -> {
+                    // TAB PROFESSIONAL SYSTEM LIMITER
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "PROFESSIONAL STUDIO BRICKWALL LIMITER 🛡️",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = AudioNeonRed
+                                )
+                                
+                                androidx.compose.material3.Switch(
+                                    checked = localIsLimiterEnabled,
+                                    onCheckedChange = {
+                                        localIsLimiterEnabled = it
+                                        serviceInstance?.isLimiterEnabled = it
+                                    },
+                                    colors = androidx.compose.material3.SwitchDefaults.colors(
+                                        checkedThumbColor = AudioNeonRed,
+                                        checkedTrackColor = Color(0x3DFF3B30),
+                                        uncheckedThumbColor = Color.Gray,
+                                        uncheckedTrackColor = Color(0x13FFFFFF)
+                                    )
+                                )
+                            }
+
+                            // GAIN REDUCTION LED METER DISPLAY
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF0F101A), shape = RoundedCornerShape(4.dp))
+                                    .border(1.dp, Color(0x1FFFFFFF), shape = RoundedCornerShape(4.dp))
+                                    .padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("GAIN REDUCTION (LIMITING DEPTH)", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = AudioTextSecondary)
+                                    Text(
+                                        text = if (limiterGainReduction > 0.05f) String.format("-%.1f dB", limiterGainReduction) else "PASS CONTROL",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (limiterGainReduction > 0.05f) AudioNeonRed else AudioNeonGreen,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(14.dp)
+                                        .background(Color.Black, shape = RoundedCornerShape(2.dp))
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxSize(),
+                                        horizontalArrangement = Arrangement.spacedBy(1.dp)
+                                    ) {
+                                        for (i in 1..30) {
+                                            val segmentDb = (30 - i).toFloat() * 0.8f
+                                            val isLit = limiterGainReduction >= segmentDb
+                                            val litColor = when {
+                                                segmentDb >= 12f -> AudioNeonRed
+                                                segmentDb >= 6f -> AudioNeonAmber
+                                                else -> AudioNeonGreen
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .fillMaxHeight()
+                                                    .background(
+                                                        if (isLit) litColor else Color(0x19FFFFFF),
+                                                        shape = RoundedCornerShape(0.5.dp)
+                                                    )
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("-24 dB", fontSize = 8.sp, color = AudioTextSecondary, fontFamily = FontFamily.Monospace)
+                                    Text("-18", fontSize = 8.sp, color = AudioTextSecondary, fontFamily = FontFamily.Monospace)
+                                    Text("-12", fontSize = 8.sp, color = AudioTextSecondary, fontFamily = FontFamily.Monospace)
+                                    Text("-6", fontSize = 8.sp, color = AudioTextSecondary, fontFamily = FontFamily.Monospace)
+                                    Text("-3", fontSize = 8.sp, color = AudioTextSecondary, fontFamily = FontFamily.Monospace)
+                                    Text("0 dB", fontSize = 8.sp, color = AudioNeonCyan, fontFamily = FontFamily.Monospace)
+                                }
+                            }
+
+                            // Limiter Sliders
+                            DoubleSliderWidget(
+                                label = "Limiter Threshold (Ambang Batas)",
+                                valueText = String.format("%.1f dB", localLimiterThresholdDb),
+                                value = localLimiterThresholdDb,
+                                valueRange = -24f..0f,
+                                onValueChange = {
+                                    localLimiterThresholdDb = it
+                                    serviceInstance?.limiterThresholdDb = it
+                                }
+                            )
+
+                            DoubleSliderWidget(
+                                label = "Release Time (Waktu Pelepasan)",
+                                valueText = String.format("%.0f ms", localLimiterReleaseMs),
+                                value = localLimiterReleaseMs,
+                                valueRange = 10f..1000f,
+                                onValueChange = {
+                                    localLimiterReleaseMs = it
+                                    serviceInstance?.limiterReleaseMs = it
+                                }
+                            )
+
+                            DoubleSliderWidget(
+                                label = "Ceiling Output (Langit-Langit Keluaran)",
+                                valueText = String.format("%.1f dB", localLimiterCeilingDb),
+                                value = localLimiterCeilingDb,
+                                valueRange = -3f..0f,
+                                onValueChange = {
+                                    localLimiterCeilingDb = it
+                                    serviceInstance?.limiterCeilingDb = it
+                                }
+                            )
+
+                            DoubleSliderWidget(
+                                label = "Safety Knee Mode (Lengkungan Transisi)",
+                                valueText = if (localLimiterKneeDb <= 0.05f) "HARD SHIELD (0.0 dB)" else String.format("SOFT SHIELD (%.1f dB)", localLimiterKneeDb),
+                                value = localLimiterKneeDb,
+                                valueRange = 0f..6f,
+                                onValueChange = {
+                                    localLimiterKneeDb = it
+                                    serviceInstance?.limiterKneeDb = it
                                 }
                             )
                         }
@@ -1483,3 +1945,17 @@ private fun getWaveName(type: AudioSignalGenerator.WaveformType): String {
         AudioSignalGenerator.WaveformType.AMBIENT_BEAT -> "TECHNO BEAT 🚀"
     }
 }
+
+private data class CrossoverBandItem(
+    val name: String,
+    val level: Float,
+    val gain: Float,
+    val isMuted: Boolean,
+    val isSolo: Boolean,
+    val isInverted: Boolean,
+    val accentColor: Color,
+    val onGainChange: (Float) -> Unit,
+    val onMuteChange: (Boolean) -> Unit,
+    val onSoloChange: (Boolean) -> Unit,
+    val onInvertChange: (Boolean) -> Unit
+)

@@ -12,7 +12,7 @@ import kotlinx.coroutines.launch
 /**
  * Pemegang Database Room utama untuk database audio lokal.
  */
-@Database(entities = [PresetEntity::class], version = 2, exportSchema = false)
+@Database(entities = [PresetEntity::class], version = 3, exportSchema = false)
 abstract class AudioDatabase : RoomDatabase() {
     abstract fun presetDao(): PresetDao
 

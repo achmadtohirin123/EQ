@@ -132,6 +132,123 @@ class AudioProcessorService : Service() {
             prefs.edit().putFloat("volumeRight", field).apply()
         }
 
+    // --- DIGITAL CROSSOVER PRO 4-WAY CONFIGURATION ---
+    var crossoverSubLowHz = 80f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverLowMidHz = 250f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverMidHighHz = 3500f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+
+    var crossoverSubGain = 0f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverLowGain = 0f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverMidGain = 0f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverHighGain = 0f
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+
+    var crossoverSubMute = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverLowMute = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverMidMute = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverHighMute = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+
+    var crossoverSubSolo = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverLowSolo = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverMidSolo = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverHighSolo = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+
+    var crossoverSubInvert = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverLowInvert = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverMidInvert = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+    var crossoverHighInvert = false
+        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+
+    // --- PROFESSIONAL AUDIO LIMITER CONFIGURATION ---
+    var limiterThresholdDb = 0f
+        set(value) { 
+            field = value.coerceIn(-24f, 0f)
+            updateLimiterConfig()
+            saveActivePresetStateToDbDebounced()
+        }
+    var limiterReleaseMs = 100f
+        set(value) { 
+            field = value.coerceIn(10f, 1000f)
+            updateLimiterConfig()
+            saveActivePresetStateToDbDebounced()
+        }
+    var limiterCeilingDb = -0.1f
+        set(value) { 
+            field = value.coerceIn(-3f, 0f)
+            saveActivePresetStateToDbDebounced()
+        }
+    var limiterKneeDb = 0f
+        set(value) { 
+            field = value.coerceIn(0f, 6f)
+            saveActivePresetStateToDbDebounced()
+        }
+    var isLimiterEnabled = true
+        set(value) { 
+            field = value
+            updateLimiterConfig()
+            saveActivePresetStateToDbDebounced()
+        }
+
+    fun updateLimiterConfig() {
+        for (group in activeEffects.values) {
+            group.dynamicsProcessing?.let { applyLimiterToDynamics(it) }
+        }
+    }
+
+    fun applyLimiterToDynamics(dyn: DynamicsProcessing) {
+        try {
+            // Android DynamicsProcessing.Limiter:
+            // Limiter(inUse: Boolean, enabled: Boolean, linkGroup: Int, attackTime: Float, releaseTime: Float, ratio: Float, threshold: Float, postGain: Float)
+            val limiterConfig = DynamicsProcessing.Limiter(
+                true, // inUse
+                isLimiterEnabled, // enabled
+                0, // linkGroup (same group for L/R preservation)
+                1.0f, // attackTime (ultra-fast brickwall response)
+                limiterReleaseMs, // releaseTime MS
+                50.0f, // ratio (brickwall slope limit)
+                limiterThresholdDb, // target threshold Db
+                0.0f // postGain Db
+            )
+            dyn.setLimiterByChannelIndex(0, limiterConfig)
+            dyn.setLimiterByChannelIndex(1, limiterConfig)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // --- REALTIME FREQUENCY BAND & GAIN REDUCTION METERING FLOWS ---
+    private val _crossoverSubLevel = MutableStateFlow(0f)
+    val crossoverSubLevel = _crossoverSubLevel.asStateFlow()
+
+    private val _crossoverLowLevel = MutableStateFlow(0f)
+    val crossoverLowLevel = _crossoverLowLevel.asStateFlow()
+
+    private val _crossoverMidLevel = MutableStateFlow(0f)
+    val crossoverMidLevel = _crossoverMidLevel.asStateFlow()
+
+    private val _crossoverHighLevel = MutableStateFlow(0f)
+    val crossoverHighLevel = _crossoverHighLevel.asStateFlow()
+
+    private val _limiterGainReduction = MutableStateFlow(0f)
+    val limiterGainReduction = _limiterGainReduction.asStateFlow()
+
     private var audioPlaybackJob: Job? = null
 
     // Live Metering data yang diekspos ke UI Compose pada 60FPS
@@ -376,12 +493,13 @@ class AudioProcessorService : Service() {
                 false, 0, // preEq
                 false, 0, // mbc
                 false, 0, // postEq
-                false      // limiter
+                true      // limiter enabled!
             )
             dyn = DynamicsProcessing(0, sessionId, builder.build()).apply {
                 enabled = signalGenerator.isPlaying
             }
             applyVolumeToDynamics(dyn)
+            applyLimiterToDynamics(dyn)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -480,8 +598,86 @@ class AudioProcessorService : Service() {
                                 newSpectrum[vBand] = smoothed
                             }
                             _spectrumData.value = newSpectrum
+
+                            // --- REALTIME 4-WAY CROSSOVER ENERGY SPLITTING ---
+                            var subSum = 0f
+                            var lowSum = 0f
+                            var midSum = 0f
+                            var highSum = 0f
+                            
+                            var subCount = 0
+                            var lowCount = 0
+                            var midCount = 0
+                            var highCount = 0
+                            
+                            val nBins = n / 2
+                            for (i in 1 until nBins) {
+                                val f = i.toFloat() * samplingRateHz / n.toFloat()
+                                val mag = magnitudes[i]
+                                
+                                if (f < crossoverSubLowHz) {
+                                    subSum += mag
+                                    subCount++
+                                } else if (f < crossoverLowMidHz) {
+                                    lowSum += mag
+                                    lowCount++
+                                } else if (f < crossoverMidHighHz) {
+                                    midSum += mag
+                                    midCount++
+                                } else {
+                                    highSum += mag
+                                    highCount++
+                                }
+                            }
+                            
+                            val anySolo = crossoverSubSolo || crossoverLowSolo || crossoverMidSolo || crossoverHighSolo
+                            
+                            fun getCrossoverBandLevel(avgMag: Float, gainDb: Float, isMuted: Boolean, isSoloSelected: Boolean): Float {
+                                if (isMuted) return 0f
+                                if (anySolo && !isSoloSelected) return 0f
+                                
+                                val dbOffset = 20.0 * kotlin.math.log10((avgMag + 1e-4) / 128.0)
+                                val totalDb = dbOffset + gainDb
+                                val level = ((totalDb + 38.0) / 38.0).toFloat().coerceIn(0f, 1f)
+                                return level
+                            }
+                            
+                            val subAvg = if (subCount > 0) subSum / subCount else 0f
+                            val lowAvg = if (lowCount > 0) lowSum / lowCount else 0f
+                            val midAvg = if (midCount > 0) midSum / midCount else 0f
+                            val highAvg = if (highCount > 0) highSum / highCount else 0f
+                            
+                            val adjustedHighAvg = highAvg * 2.2f
+                            
+                            val rawSub = getCrossoverBandLevel(subAvg, crossoverSubGain, crossoverSubMute, crossoverSubSolo) * 1.5f * maxVolFactor
+                            val rawLow = getCrossoverBandLevel(lowAvg, crossoverLowGain, crossoverLowMute, crossoverLowSolo) * 1.3f * maxVolFactor
+                            val rawMid = getCrossoverBandLevel(midAvg, crossoverMidGain, crossoverMidMute, crossoverMidSolo) * 1.1f * maxVolFactor
+                            val rawHigh = getCrossoverBandLevel(adjustedHighAvg, crossoverHighGain, crossoverHighMute, crossoverHighSolo) * 1.2f * maxVolFactor
+                            
+                            _crossoverSubLevel.value = (_crossoverSubLevel.value * 0.15f + rawSub.coerceIn(0f, 1f) * 0.85f)
+                            _crossoverLowLevel.value = (_crossoverLowLevel.value * 0.15f + rawLow.coerceIn(0f, 1f) * 0.85f)
+                            _crossoverMidLevel.value = (_crossoverMidLevel.value * 0.15f + rawMid.coerceIn(0f, 1f) * 0.85f)
+                            _crossoverHighLevel.value = (_crossoverHighLevel.value * 0.15f + rawHigh.coerceIn(0f, 1f) * 0.85f)
+
+                            // --- PROFESSIONAL MASTER LIMITER DYNAMIC DISPLAY ---
+                            val peakVolume = maxOf(_vuLeft.value, _vuRight.value)
+                            val peakDb = if (peakVolume <= 0.005f) -120f else 20f * kotlin.math.log10(peakVolume)
+                            
+                            val targetGR = if (isLimiterEnabled && peakDb > limiterThresholdDb) {
+                                peakDb - limiterThresholdDb
+                            } else {
+                                0f
+                            }.coerceIn(0f, 24f)
+                            
+                            val grSmoother = (1.0f - (10.0f / limiterReleaseMs.coerceAtLeast(10f))).coerceIn(0.5f, 0.95f)
+                            _limiterGainReduction.value = (_limiterGainReduction.value * grSmoother + targetGR * (1.0f - grSmoother))
                         } else {
                             _spectrumData.value = FloatArray(31) { 0f }
+                            _crossoverSubLevel.value = 0f
+                            _crossoverLowLevel.value = 0f
+                            _crossoverMidLevel.value = 0f
+                            _crossoverHighLevel.value = 0f
+                            _limiterGainReduction.value = 0f
                         }
                     }
                 }, Visualizer.getMaxCaptureRate() / 2, true, true)
@@ -625,20 +821,53 @@ class AudioProcessorService : Service() {
         stereoWidener.reverbLevel = preset.reverbLevel
         bassBoostDb = preset.bassBoostDb // Ini otomatis memicu updateBassBoost()
 
+        // Terapkan Crossover Parameters
+        crossoverSubLowHz = preset.crossoverSubLowHz
+        crossoverLowMidHz = preset.crossoverLowMidHz
+        crossoverMidHighHz = preset.crossoverMidHighHz
+        
+        crossoverSubGain = preset.crossoverSubGain
+        crossoverLowGain = preset.crossoverLowGain
+        crossoverMidGain = preset.crossoverMidGain
+        crossoverHighGain = preset.crossoverHighGain
+        
+        crossoverSubMute = preset.crossoverSubMute
+        crossoverLowMute = preset.crossoverLowMute
+        crossoverMidMute = preset.crossoverMidMute
+        crossoverHighMute = preset.crossoverHighMute
+        
+        crossoverSubSolo = preset.crossoverSubSolo
+        crossoverLowSolo = preset.crossoverLowSolo
+        crossoverMidSolo = preset.crossoverMidSolo
+        crossoverHighSolo = preset.crossoverHighSolo
+        
+        crossoverSubInvert = preset.crossoverSubInvert
+        crossoverLowInvert = preset.crossoverLowInvert
+        crossoverMidInvert = preset.crossoverMidInvert
+        crossoverHighInvert = preset.crossoverHighInvert
+
+        // Terapkan Limiter Parameters
+        limiterThresholdDb = preset.limiterThresholdDb
+        limiterReleaseMs = preset.limiterReleaseMs
+        limiterCeilingDb = preset.limiterCeilingDb
+        limiterKneeDb = preset.limiterKneeDb
+        isLimiterEnabled = preset.isLimiterEnabled
+
         // Pancing update filter equalizer
         updateFiltersConfig()
-
+ 
         // Perbarui semua live active effects kustom HP
         for (group in activeEffects.values) {
             group.equalizer?.let { applyEqToEqualizer(it) }
             group.bassBoost?.let { applyBassToBassBoost(it) }
             group.virtualizer?.let { applyWidthToVirtualizer(it) }
             group.presetReverb?.let { applyReverbToPresetReverb(it) }
+            group.dynamicsProcessing?.let { applyLimiterToDynamics(it) }
         }
-
+ 
         updateNotification()
     }
-
+ 
     /**
      * Menyimpan setelan Equalizer kustom baru ke dalam database lokal.
      */
@@ -655,11 +884,41 @@ class AudioProcessorService : Service() {
                 makeup = compressorLimiter.makeupGainDb,
                 width = stereoWidener.stereoWidth,
                 bass = bassBoostDb,
-                reverb = stereoWidener.reverbLevel
+                reverb = stereoWidener.reverbLevel,
+                
+                crossoverSubLowHz = crossoverSubLowHz,
+                crossoverLowMidHz = crossoverLowMidHz,
+                crossoverMidHighHz = crossoverMidHighHz,
+                
+                crossoverSubGain = crossoverSubGain,
+                crossoverLowGain = crossoverLowGain,
+                crossoverMidGain = crossoverMidGain,
+                crossoverHighGain = crossoverHighGain,
+                
+                crossoverSubMute = crossoverSubMute,
+                crossoverLowMute = crossoverLowMute,
+                crossoverMidMute = crossoverMidMute,
+                crossoverHighMute = crossoverHighMute,
+                
+                crossoverSubSolo = crossoverSubSolo,
+                crossoverLowSolo = crossoverLowSolo,
+                crossoverMidSolo = crossoverMidSolo,
+                crossoverHighSolo = crossoverHighSolo,
+                
+                crossoverSubInvert = crossoverSubInvert,
+                crossoverLowInvert = crossoverLowInvert,
+                crossoverMidInvert = crossoverMidInvert,
+                crossoverHighInvert = crossoverHighInvert,
+                
+                limiterThresholdDb = limiterThresholdDb,
+                limiterReleaseMs = limiterReleaseMs,
+                limiterCeilingDb = limiterCeilingDb,
+                limiterKneeDb = limiterKneeDb,
+                isLimiterEnabled = isLimiterEnabled
             )
         }
     }
-
+ 
     fun saveActivePresetStateToDbDebounced() {
         saveJob?.cancel()
         saveJob = serviceScope.launch(Dispatchers.IO) {
@@ -674,7 +933,37 @@ class AudioProcessorService : Service() {
                 compMakeupGainDb = compressorLimiter.makeupGainDb,
                 stereoWidth = stereoWidener.stereoWidth,
                 bassBoostDb = bassBoostDb,
-                reverbLevel = stereoWidener.reverbLevel
+                reverbLevel = stereoWidener.reverbLevel,
+                
+                crossoverSubLowHz = crossoverSubLowHz,
+                crossoverLowMidHz = crossoverLowMidHz,
+                crossoverMidHighHz = crossoverMidHighHz,
+                
+                crossoverSubGain = crossoverSubGain,
+                crossoverLowGain = crossoverLowGain,
+                crossoverMidGain = crossoverMidGain,
+                crossoverHighGain = crossoverHighGain,
+                
+                crossoverSubMute = crossoverSubMute,
+                crossoverLowMute = crossoverLowMute,
+                crossoverMidMute = crossoverMidMute,
+                crossoverHighMute = crossoverHighMute,
+                
+                crossoverSubSolo = crossoverSubSolo,
+                crossoverLowSolo = crossoverLowSolo,
+                crossoverMidSolo = crossoverMidSolo,
+                crossoverHighSolo = crossoverHighSolo,
+                
+                crossoverSubInvert = crossoverSubInvert,
+                crossoverLowInvert = crossoverLowInvert,
+                crossoverMidInvert = crossoverMidInvert,
+                crossoverHighInvert = crossoverHighInvert,
+                
+                limiterThresholdDb = limiterThresholdDb,
+                limiterReleaseMs = limiterReleaseMs,
+                limiterCeilingDb = limiterCeilingDb,
+                limiterKneeDb = limiterKneeDb,
+                isLimiterEnabled = isLimiterEnabled
             )
             repository.updatePresetSelection(updatedPreset)
             _activePreset.value = updatedPreset
