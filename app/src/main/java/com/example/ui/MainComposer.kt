@@ -905,20 +905,8 @@ fun AudioProcessorDashboard() {
                                         onValueChange = { newValue ->
                                             localEqGains[bandIdx] = newValue
                                             if (serviceInstance != null) {
-                                                if (eqBandResolution == 2) {
-                                                    // Ubah satu band tunggal secara instan
-                                                    serviceInstance?.updateSingleEqBand(bandIdx, newValue)
-                                                } else {
-                                                    // Interpolasi bell-curve menyebar ke samping band tetangga agar kurva EQ melandai natural
-                                                    applyBellCurveInterpolation(serviceInstance!!, bandIdx, newValue)
-                                                    // Sinkronisasi lokal kembali setelah bell-curve interpolation
-                                                    val updatedGains = serviceInstance?.getEqGains() ?: FloatArray(31) { 0f }
-                                                    updatedGains.forEachIndexed { idx, valDb ->
-                                                        if (idx < localEqGains.size) {
-                                                            localEqGains[idx] = valDb
-                                                        }
-                                                    }
-                                                }
+                                                // Ubah satu band tunggal secara instan sesuai keinginan pengguna (satu persatu)
+                                                serviceInstance?.updateSingleEqBand(bandIdx, newValue)
                                             }
                                         }
                                     )
