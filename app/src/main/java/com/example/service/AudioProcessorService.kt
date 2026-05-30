@@ -56,6 +56,9 @@ class AudioProcessorService : Service() {
     // Database & Repository
     private lateinit var repository: PresetRepository
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val prefs by lazy { getSharedPreferences("audio_settings_prefs", Context.MODE_PRIVATE) }
+    private var lastAppliedPresetId: Int? = null
+    private var saveJob: Job? = null
 
     // Backwards Compatibility / UI Dummies
     val signalGenerator = AudioSignalGenerator() // Tetap dipertahankan agar tidak break UI references
@@ -74,6 +77,7 @@ class AudioProcessorService : Service() {
         set(value) {
             field = value
             updateBassBoost()
+            saveActivePresetStateToDbDebounced()
         }
 
     // Blok Module Bypass Pengaturan
@@ -83,6 +87,7 @@ class AudioProcessorService : Service() {
             for (group in activeEffects.values) {
                 try { group.equalizer?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
             }
+            prefs.edit().putBoolean("isEqBlockEnabled", value).apply()
         }
 
     var isBassBoostBlockEnabled = true
@@ -91,6 +96,7 @@ class AudioProcessorService : Service() {
             for (group in activeEffects.values) {
                 try { group.bassBoost?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
             }
+            prefs.edit().putBoolean("isBassBoostBlockEnabled", value).apply()
         }
 
     var isVirtualizerBlockEnabled = true
@@ -99,6 +105,7 @@ class AudioProcessorService : Service() {
             for (group in activeEffects.values) {
                 try { group.virtualizer?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
             }
+            prefs.edit().putBoolean("isVirtualizerBlockEnabled", value).apply()
         }
 
     var isReverbBlockEnabled = true
@@ -107,6 +114,7 @@ class AudioProcessorService : Service() {
             for (group in activeEffects.values) {
                 try { group.presetReverb?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
             }
+            prefs.edit().putBoolean("isReverbBlockEnabled", value).apply()
         }
 
     // Independent Left and Right volume sliders
@@ -114,12 +122,14 @@ class AudioProcessorService : Service() {
         set(value) {
             field = value.coerceIn(0f, 1f)
             updateChannelVolumes()
+            prefs.edit().putFloat("volumeLeft", field).apply()
         }
 
     var volumeRight = 1.0f
         set(value) {
             field = value.coerceIn(0f, 1f)
             updateChannelVolumes()
+            prefs.edit().putFloat("volumeRight", field).apply()
         }
 
     private var audioPlaybackJob: Job? = null
@@ -188,6 +198,14 @@ class AudioProcessorService : Service() {
         _isEnginePlaying.value = true
         syncLocalAudioPlayback()
 
+        // Load SharedPreferences
+        isEqBlockEnabled = prefs.getBoolean("isEqBlockEnabled", true)
+        isBassBoostBlockEnabled = prefs.getBoolean("isBassBoostBlockEnabled", true)
+        isVirtualizerBlockEnabled = prefs.getBoolean("isVirtualizerBlockEnabled", true)
+        isReverbBlockEnabled = prefs.getBoolean("isReverbBlockEnabled", true)
+        volumeLeft = prefs.getFloat("volumeLeft", 1.0f)
+        volumeRight = prefs.getFloat("volumeRight", 1.0f)
+
         // Inisialisasi Database
         val database = AudioDatabase.getDatabase(this)
         repository = PresetRepository(database.presetDao())
@@ -225,7 +243,11 @@ class AudioProcessorService : Service() {
             repository.ensureDefaultPresetsPopulated()
             repository.allPresets.collect { list ->
                 val active = list.firstOrNull { it.isSelected }
-                active?.let { applyPresetSettings(it) }
+                active?.let { 
+                    if (it.id != lastAppliedPresetId) {
+                        applyPresetSettings(it)
+                    }
+                }
             }
         }
     }
@@ -580,6 +602,7 @@ class AudioProcessorService : Service() {
      * Menerapkan koefisien setelan lengkap dari objek PresetEntity.
      */
     fun applyPresetSettings(preset: PresetEntity) {
+        lastAppliedPresetId = preset.id
         _activePresetName.value = preset.name
         _activePreset.value = preset
         
@@ -637,6 +660,27 @@ class AudioProcessorService : Service() {
         }
     }
 
+    fun saveActivePresetStateToDbDebounced() {
+        saveJob?.cancel()
+        saveJob = serviceScope.launch(Dispatchers.IO) {
+            delay(500)
+            val currentPreset = _activePreset.value ?: return@launch
+            val updatedPreset = currentPreset.copy(
+                eqGainsString = PresetEntity.convertGainsToString(currentEqGains.toList()),
+                compThresholdDb = compressorLimiter.thresholdDb,
+                compRatio = compressorLimiter.ratio,
+                compAttackMs = compressorLimiter.attackMs,
+                compReleaseMs = compressorLimiter.releaseMs,
+                compMakeupGainDb = compressorLimiter.makeupGainDb,
+                stereoWidth = stereoWidener.stereoWidth,
+                bassBoostDb = bassBoostDb,
+                reverbLevel = stereoWidener.reverbLevel
+            )
+            repository.updatePresetSelection(updatedPreset)
+            _activePreset.value = updatedPreset
+        }
+    }
+
     /**
      * Memodifikasi satu slider EQ band secara dinamis dari UI Compose.
      */
@@ -644,6 +688,7 @@ class AudioProcessorService : Service() {
         if (bandIndex in 0 until 31) {
             currentEqGains[bandIndex] = gainDb
             updateFiltersConfig()
+            saveActivePresetStateToDbDebounced()
         }
     }
 
@@ -683,22 +728,27 @@ class AudioProcessorService : Service() {
     // Setters pelorot langsung dari slider UI
     fun updateCompressorThreshold(value: Float) {
         compressorLimiter.thresholdDb = value
+        saveActivePresetStateToDbDebounced()
     }
 
     fun updateCompressorRatio(value: Float) {
         compressorLimiter.ratio = value
+        saveActivePresetStateToDbDebounced()
     }
 
     fun updateCompressorAttack(value: Float) {
         compressorLimiter.attackMs = value
+        saveActivePresetStateToDbDebounced()
     }
 
     fun updateCompressorRelease(value: Float) {
         compressorLimiter.releaseMs = value
+        saveActivePresetStateToDbDebounced()
     }
 
     fun updateCompressorMakeup(value: Float) {
         compressorLimiter.makeupGainDb = value
+        saveActivePresetStateToDbDebounced()
     }
 
     fun updateStereoWidth(value: Float) {
@@ -706,6 +756,7 @@ class AudioProcessorService : Service() {
         for (group in activeEffects.values) {
             group.virtualizer?.let { applyWidthToVirtualizer(it) }
         }
+        saveActivePresetStateToDbDebounced()
     }
 
     fun updateReverbLevel(value: Float) {
@@ -713,6 +764,7 @@ class AudioProcessorService : Service() {
         for (group in activeEffects.values) {
             group.presetReverb?.let { applyReverbToPresetReverb(it) }
         }
+        saveActivePresetStateToDbDebounced()
     }
 
     fun getCompressorThreshold() = compressorLimiter.thresholdDb
