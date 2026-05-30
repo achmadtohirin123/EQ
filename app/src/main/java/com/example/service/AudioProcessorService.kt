@@ -15,6 +15,9 @@ import android.media.audiofx.BassBoost
 import android.media.audiofx.Virtualizer
 import android.media.audiofx.PresetReverb
 import android.media.audiofx.Visualizer
+import android.media.AudioTrack
+import android.media.AudioFormat
+import android.media.AudioAttributes
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -116,6 +119,8 @@ class AudioProcessorService : Service() {
             field = value.coerceIn(0f, 1f)
         }
 
+    private var audioPlaybackJob: Job? = null
+
     // Live Metering data yang diekspos ke UI Compose pada 60FPS
     private val _vuLeft = MutableStateFlow(0f)
     val vuLeft = _vuLeft.asStateFlow()
@@ -174,6 +179,7 @@ class AudioProcessorService : Service() {
         
         // Atur agar signalGenerator dummy dianggap default true
         signalGenerator.isPlaying = true
+        syncLocalAudioPlayback()
 
         // Inisialisasi Database
         val database = AudioDatabase.getDatabase(this)
@@ -235,6 +241,7 @@ class AudioProcessorService : Service() {
                 _clipRight.value = false
                 _spectrumData.value = FloatArray(31) { 0f }
             }
+            syncLocalAudioPlayback()
             updateNotification()
         }
         
@@ -266,6 +273,7 @@ class AudioProcessorService : Service() {
         }
 
         stopGlobalVisualizer()
+        stopLocalAudioPlayback()
 
         // Bebaskan seluruh session effects
         val keys = activeEffects.keys().toList()
@@ -720,6 +728,123 @@ class AudioProcessorService : Service() {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
+    }
+
+    fun syncLocalAudioPlayback() {
+        if (signalGenerator.isPlaying) {
+            startLocalAudioPlayback()
+        } else {
+            stopLocalAudioPlayback()
+        }
+    }
+
+    private fun startLocalAudioPlayback() {
+        if (audioPlaybackJob != null) return
+        audioPlaybackJob = serviceScope.launch(Dispatchers.Default) {
+            val sampleRate = 44100
+            val minBufSize = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_STEREO,
+                AudioFormat.ENCODING_PCM_FLOAT
+            )
+            val bufferSize = maxOf(minBufSize, 4096 * 4)
+
+            val audioTrack = try {
+                AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                null
+            }
+
+            if (audioTrack == null) return@launch
+
+            try {
+                audioTrack.play()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                audioTrack.release()
+                return@launch
+            }
+
+            val localFilters = Array(31) { BiquadFilter() }
+            val frameChunk = 512
+            val writeBuffer = FloatArray(frameChunk * 2)
+            val tempPair = FloatArray(2)
+
+            while (isActive && signalGenerator.isPlaying) {
+                for (b in 0 until 31) {
+                    localFilters[b].configurePeakingEQ(
+                        eqFrequencies[b],
+                        1.41f,
+                        currentEqGains[b],
+                        sampleRate.toFloat()
+                    )
+                }
+
+                for (frame in 0 until frameChunk) {
+                    signalGenerator.nextSample(tempPair)
+                    var left = tempPair[0]
+                    var right = tempPair[1]
+
+                    if (isEqBlockEnabled) {
+                        for (b in 0 until 31) {
+                            left = localFilters[b].processLeft(left)
+                            right = localFilters[b].processRight(right)
+                        }
+                    }
+
+                    if (isBassBoostBlockEnabled && bassBoostDb > 0.05f) {
+                        val bassMult = 1f + (bassBoostDb / 15f) * 0.7f
+                        left += left * (bassMult - 1f) * 0.45f
+                        right += right * (bassMult - 1f) * 0.45f
+                    }
+
+                    val compOutput = FloatArray(2)
+                    compressorLimiter.process(left, right, compOutput)
+                    left = compOutput[0]
+                    right = compOutput[1]
+
+                    left *= volumeLeft
+                    right *= volumeRight
+
+                    left = left.coerceIn(-1.0f, 1.0f)
+                    right = right.coerceIn(-1.0f, 1.0f)
+
+                    writeBuffer[frame * 2] = left
+                    writeBuffer[frame * 2 + 1] = right
+                }
+
+                audioTrack.write(writeBuffer, 0, writeBuffer.size, AudioTrack.WRITE_BLOCKING)
+            }
+
+            try {
+                audioTrack.stop()
+                audioTrack.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun stopLocalAudioPlayback() {
+        audioPlaybackJob?.cancel()
+        audioPlaybackJob = null
     }
 
     // Kelas pembungkus untuk menampung seluruh efek aktif audio session
