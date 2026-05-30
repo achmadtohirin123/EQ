@@ -15,6 +15,7 @@ import android.media.audiofx.BassBoost
 import android.media.audiofx.Virtualizer
 import android.media.audiofx.PresetReverb
 import android.media.audiofx.Visualizer
+import android.media.audiofx.DynamicsProcessing
 import android.media.AudioTrack
 import android.media.AudioFormat
 import android.media.AudioAttributes
@@ -112,11 +113,13 @@ class AudioProcessorService : Service() {
     var volumeLeft = 1.0f
         set(value) {
             field = value.coerceIn(0f, 1f)
+            updateChannelVolumes()
         }
 
     var volumeRight = 1.0f
         set(value) {
             field = value.coerceIn(0f, 1f)
+            updateChannelVolumes()
         }
 
     private var audioPlaybackJob: Job? = null
@@ -342,7 +345,26 @@ class AudioProcessorService : Service() {
             e.printStackTrace()
         }
 
-        activeEffects[sessionId] = AudioEffectsGroup(sessionId, eq, bass, virt, reverb)
+        // Inisialisasi DynamicsProcessing untuk Master Volume L/R
+        var dyn: DynamicsProcessing? = null
+        try {
+            val builder = DynamicsProcessing.Config.Builder(
+                DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                2, // L and R channels
+                false, 0, // preEq
+                false, 0, // mbc
+                false, 0, // postEq
+                false      // limiter
+            )
+            dyn = DynamicsProcessing(0, sessionId, builder.build()).apply {
+                enabled = signalGenerator.isPlaying
+            }
+            applyVolumeToDynamics(dyn)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        activeEffects[sessionId] = AudioEffectsGroup(sessionId, eq, bass, virt, reverb, dyn)
     }
 
     /**
@@ -629,6 +651,35 @@ class AudioProcessorService : Service() {
         return currentEqGains.clone()
     }
 
+    fun floatToDb(vol: Float): Float {
+        if (vol <= 0.005f) return -120f // completely silent
+        return 20f * kotlin.math.log10(vol)
+    }
+
+    fun updateChannelVolumes() {
+        val gainDbLeft = floatToDb(volumeLeft)
+        val gainDbRight = floatToDb(volumeRight)
+        for (group in activeEffects.values) {
+            group.dynamicsProcessing?.let { dyn ->
+                try {
+                    dyn.setInputGainbyChannel(0, gainDbLeft)
+                    dyn.setInputGainbyChannel(1, gainDbRight)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    fun applyVolumeToDynamics(dyn: DynamicsProcessing) {
+        try {
+            dyn.setInputGainbyChannel(0, floatToDb(volumeLeft))
+            dyn.setInputGainbyChannel(1, floatToDb(volumeRight))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     // Setters pelorot langsung dari slider UI
     fun updateCompressorThreshold(value: Float) {
         compressorLimiter.thresholdDb = value
@@ -744,107 +795,7 @@ class AudioProcessorService : Service() {
     }
 
     private fun startLocalAudioPlayback() {
-        if (audioPlaybackJob != null) return
-        audioPlaybackJob = serviceScope.launch(Dispatchers.Default) {
-            val sampleRate = 44100
-            val minBufSize = AudioTrack.getMinBufferSize(
-                sampleRate,
-                AudioFormat.CHANNEL_OUT_STEREO,
-                AudioFormat.ENCODING_PCM_FLOAT
-            )
-            val bufferSize = maxOf(minBufSize, 4096 * 4)
-
-            val audioTrack = try {
-                AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(bufferSize)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
-
-            if (audioTrack == null) return@launch
-
-            try {
-                audioTrack.play()
-            } catch (e: Exception) {
-                e.printStackTrace()
-                audioTrack.release()
-                return@launch
-            }
-
-            val localFilters = Array(31) { BiquadFilter() }
-            val frameChunk = 512
-            val writeBuffer = FloatArray(frameChunk * 2)
-            val tempPair = FloatArray(2)
-
-            while (isActive && signalGenerator.isPlaying) {
-                for (b in 0 until 31) {
-                    localFilters[b].configurePeakingEQ(
-                        eqFrequencies[b],
-                        1.41f,
-                        currentEqGains[b],
-                        sampleRate.toFloat()
-                    )
-                }
-
-                for (frame in 0 until frameChunk) {
-                    signalGenerator.nextSample(tempPair)
-                    var left = tempPair[0]
-                    var right = tempPair[1]
-
-                    if (isEqBlockEnabled) {
-                        for (b in 0 until 31) {
-                            left = localFilters[b].processLeft(left)
-                            right = localFilters[b].processRight(right)
-                        }
-                    }
-
-                    if (isBassBoostBlockEnabled && bassBoostDb > 0.05f) {
-                        val bassMult = 1f + (bassBoostDb / 15f) * 0.7f
-                        left += left * (bassMult - 1f) * 0.45f
-                        right += right * (bassMult - 1f) * 0.45f
-                    }
-
-                    val compOutput = FloatArray(2)
-                    compressorLimiter.process(left, right, compOutput)
-                    left = compOutput[0]
-                    right = compOutput[1]
-
-                    left *= volumeLeft
-                    right *= volumeRight
-
-                    left = left.coerceIn(-1.0f, 1.0f)
-                    right = right.coerceIn(-1.0f, 1.0f)
-
-                    writeBuffer[frame * 2] = left
-                    writeBuffer[frame * 2 + 1] = right
-                }
-
-                audioTrack.write(writeBuffer, 0, writeBuffer.size, AudioTrack.WRITE_BLOCKING)
-            }
-
-            try {
-                audioTrack.stop()
-                audioTrack.release()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        // Dinonaktifkan total agar input audio diproses murni dari system/YouTube/Spotify saja
     }
 
     private fun stopLocalAudioPlayback() {
@@ -858,13 +809,15 @@ class AudioProcessorService : Service() {
         val equalizer: Equalizer?,
         val bassBoost: BassBoost?,
         val virtualizer: Virtualizer?,
-        val presetReverb: PresetReverb?
+        val presetReverb: PresetReverb?,
+        val dynamicsProcessing: DynamicsProcessing?
     ) {
         fun setEnabled(enabled: Boolean) {
             try { equalizer?.enabled = enabled } catch (e: Exception) {}
             try { bassBoost?.enabled = enabled } catch (e: Exception) {}
             try { virtualizer?.enabled = enabled } catch (e: Exception) {}
             try { presetReverb?.enabled = enabled } catch (e: Exception) {}
+            try { dynamicsProcessing?.enabled = enabled } catch (e: Exception) {}
         }
 
         fun release() {
@@ -872,6 +825,7 @@ class AudioProcessorService : Service() {
             try { bassBoost?.release() } catch (e: Exception) {}
             try { virtualizer?.release() } catch (e: Exception) {}
             try { presetReverb?.release() } catch (e: Exception) {}
+            try { dynamicsProcessing?.release() } catch (e: Exception) {}
         }
     }
 }
