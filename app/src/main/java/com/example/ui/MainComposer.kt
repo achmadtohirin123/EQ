@@ -125,6 +125,9 @@ fun AudioProcessorDashboard() {
     var localSubBassBoost by remember { mutableStateOf(0f) }
     var localStereoWidth by remember { mutableStateOf(1f) }
     var localReverbLevel by remember { mutableStateOf(0f) }
+    
+    var localVolLeft by remember { mutableStateOf(1f) }
+    var localVolRight by remember { mutableStateOf(1f) }
 
     // State Menu Settings Global
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -149,6 +152,8 @@ fun AudioProcessorDashboard() {
             localSubBassBoost = service.bassBoostDb
             localStereoWidth = service.getStereoWidth()
             localReverbLevel = service.getReverbLevel()
+            localVolLeft = service.volumeLeft
+            localVolRight = service.volumeRight
         }
     }
 
@@ -206,23 +211,68 @@ fun AudioProcessorDashboard() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "BRO EQ JOSJIS",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 28.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = AudioNeonCyan,
-                        style = MaterialTheme.typography.headlineLarge,
-                        modifier = Modifier.testTag("title_app")
-                    )
-                    Text(
-                        text = "RESPECT AUDIO ENGINE • SDK 35 PRO",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AudioTextSecondary,
-                        letterSpacing = 1.5.sp
-                    )
+                // Brand Logo and Contemporary Title Layout
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Custom DSP Graphic Equalizer Badge Logo
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Brush.linearGradient(listOf(AudioNeonCyan, AudioNeonGreen)))
+                            .padding(2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF0C0E17)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+                                verticalAlignment = Alignment.Bottom,
+                                modifier = Modifier.padding(bottom = 5.dp, top = 5.dp)
+                            ) {
+                                Box(modifier = Modifier.width(2.5.dp).height(8.dp).clip(RoundedCornerShape(1.dp)).background(AudioNeonCyan))
+                                Box(modifier = Modifier.width(2.5.dp).height(18.dp).clip(RoundedCornerShape(1.dp)).background(AudioNeonGreen))
+                                Box(modifier = Modifier.width(2.5.dp).height(12.dp).clip(RoundedCornerShape(1.dp)).background(AudioNeonAmber))
+                                Box(modifier = Modifier.width(2.5.dp).height(6.dp).clip(RoundedCornerShape(1.dp)).background(AudioNeonRed))
+                            }
+                        }
+                    }
+
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "BRO",
+                                fontWeight = FontWeight.Light,
+                                fontSize = 22.sp,
+                                fontFamily = FontFamily.SansSerif,
+                                color = Color.White,
+                                letterSpacing = 0.5.sp
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "EQ JOSJIS",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 22.sp,
+                                fontFamily = FontFamily.SansSerif,
+                                color = AudioNeonCyan,
+                                letterSpacing = 0.5.sp,
+                                modifier = Modifier.testTag("title_app")
+                            )
+                        }
+                        Text(
+                            text = "HYBRID DSP SYSTEM PRO",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AudioNeonGreen,
+                            letterSpacing = 2.sp
+                        )
+                    }
                 }
 
                 Row(
@@ -308,14 +358,15 @@ fun AudioProcessorDashboard() {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Icon(Icons.Filled.SettingsInputHdmi, contentDescription = "Source", tint = AudioNeonCyan)
                             Text(
-                                text = "SUMBER INPUT: HP ANDROID",
+                                text = "SISTEM AUDIO BYPASS",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = AudioTextPrimary
                             )
                         }
 
-                        // Tombol ON/OFF EQ Bypass
+                        // Tombol ON/OFF EQ Simpel: Aktif = Hijau, Nonaktif = Merah
+                        val isEngineActive = serviceInstance?.signalGenerator?.isPlaying == true
                         Button(
                             onClick = {
                                 serviceInstance?.let { service ->
@@ -326,25 +377,27 @@ fun AudioProcessorDashboard() {
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (serviceInstance?.signalGenerator?.isPlaying == true) AudioNeonGreen else AudioNeonMagenta,
-                                contentColor = Color.Black
+                                containerColor = if (isEngineActive) AudioNeonGreen else AudioNeonRed,
+                                contentColor = if (isEngineActive) Color.Black else Color.White
                             ),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(24.dp), // round pill shape
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                             modifier = Modifier
                                 .height(32.dp)
                                 .testTag("btn_power_playback")
                         ) {
-                            Icon(
-                                imageVector = if (serviceInstance?.signalGenerator?.isPlaying == true) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
-                                contentDescription = "Toggle Equalizer Engine",
-                                modifier = Modifier.size(16.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isEngineActive) Color.Black else Color.White)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (serviceInstance?.signalGenerator?.isPlaying == true) "EQ AKTIF" else "EQ MATI",
+                                text = if (isEngineActive) "AKTIF" else "NONAKTIF",
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
                             )
                         }
                     }
@@ -375,7 +428,7 @@ fun AudioProcessorDashboard() {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(130.dp),
+                            .height(180.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         // KANVAS UTAMA: REAL-TIME 60FPS GRAPHIC SPECTRUM & BEZIER EQ CURVE OVERLAY
@@ -463,23 +516,24 @@ fun AudioProcessorDashboard() {
                             }
                         }
 
-                        // KANVAS VU METER: DOUBLE L/R LED GRAPHIC METER WITH CLIPPING LEDS
+                        // KANVAS VU METER: DOUBLE L/R LED GRAPHIC METER WITH CLIPPING LEDS & INTEGRATED VOL FADERS
                         Column(
                             modifier = Modifier
-                                .width(56.dp)
+                                .width(128.dp)
                                 .fillMaxHeight()
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(Color(0xFF040508))
                                 .border(1.dp, Color(0x1Fffffff), RoundedCornerShape(8.dp))
-                                .padding(6.dp),
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("VU METER", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = AudioTextSecondary)
+                            Text("PRO MASTER VU", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = AudioTextSecondary)
                             
                             Row(
                                 modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 // Left VU
                                 Box(
@@ -508,10 +562,28 @@ fun AudioProcessorDashboard() {
                                                 color = color,
                                                 topLeft = Offset(0f, i * (blockH + 2)),
                                                 size = Size(w, blockH),
-                                                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                                                cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx())
                                             )
                                         }
                                     }
+                                }
+
+                                // Center dB labels (Professional Mixer alignment)
+                                Column(
+                                    modifier = Modifier
+                                        .width(28.dp)
+                                        .fillMaxHeight()
+                                        .padding(vertical = 2.dp),
+                                    verticalArrangement = Arrangement.SpaceBetween,
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("+6", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = AudioNeonRed, fontFamily = FontFamily.Monospace)
+                                    Text("+3", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = AudioNeonAmber, fontFamily = FontFamily.Monospace)
+                                    Text("0 dB", fontSize = 8.sp, fontWeight = FontWeight.Black, color = Color.White, fontFamily = FontFamily.Monospace)
+                                    Text("-5", fontSize = 7.sp, fontWeight = FontWeight.Medium, color = AudioNeonGreen, fontFamily = FontFamily.Monospace)
+                                    Text("-12", fontSize = 7.sp, fontWeight = FontWeight.Medium, color = AudioNeonGreen.copy(alpha = 0.8f), fontFamily = FontFamily.Monospace)
+                                    Text("-24", fontSize = 7.sp, fontWeight = FontWeight.Normal, color = AudioNeonGreen.copy(alpha = 0.6f), fontFamily = FontFamily.Monospace)
+                                    Text("-40", fontSize = 7.sp, fontWeight = FontWeight.Normal, color = AudioNeonGreen.copy(alpha = 0.4f), fontFamily = FontFamily.Monospace)
                                 }
 
                                 // Right VU
@@ -541,7 +613,7 @@ fun AudioProcessorDashboard() {
                                                 color = color,
                                                 topLeft = Offset(0f, i * (blockH + 2)),
                                                 size = Size(w, blockH),
-                                                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                                                cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx())
                                             )
                                         }
                                     }
@@ -550,24 +622,98 @@ fun AudioProcessorDashboard() {
 
                             // Glowing Peak Clip LED Indicators
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(10.dp)
+                                        .size(8.dp)
                                         .clip(CircleShape)
-                                        .background(if (clipLeft) AudioNeonRed else Color(0x33FF1744))
+                                        .background(if (clipLeft) AudioNeonRed else Color(0x22FF1744))
                                         .border(1.dp, if (clipLeft) Color.White else Color.Transparent)
                                 )
-                                Text("CLIP", fontSize = 7.sp, fontWeight = FontWeight.Bold, color = AudioTextSecondary)
+                                Text("CLIP", fontSize = 7.sp, fontWeight = FontWeight.Black, color = AudioTextSecondary)
                                 Box(
                                     modifier = Modifier
-                                        .size(10.dp)
+                                        .size(8.dp)
                                         .clip(CircleShape)
-                                        .background(if (clipRight) AudioNeonRed else Color(0x33FF1744))
+                                        .background(if (clipRight) AudioNeonRed else Color(0x22FF1744))
                                         .border(1.dp, if (clipRight) Color.White else Color.Transparent)
                                 )
+                            }
+
+                            // Channel Volume Faders (Left & Right independent controllers)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Left channel Volume Slider
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                                ) {
+                                    Text(
+                                        text = "L ${(localVolLeft * 100).toInt()}%",
+                                        fontSize = 7.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AudioNeonCyan
+                                    )
+                                    Slider(
+                                        value = localVolLeft,
+                                        onValueChange = {
+                                            localVolLeft = it
+                                            serviceInstance?.volumeLeft = it
+                                        },
+                                        valueRange = 0f..1f,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = AudioNeonGreen,
+                                            activeTrackColor = AudioNeonGreen,
+                                            inactiveTrackColor = Color(0x1Fffffff)
+                                        ),
+                                        modifier = Modifier
+                                            .height(16.dp)
+                                            .fillMaxWidth()
+                                            .testTag("slider_vol_left")
+                                    )
+                                }
+
+                                // Right channel Volume Slider
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                                ) {
+                                    Text(
+                                        text = "R ${(localVolRight * 100).toInt()}%",
+                                        fontSize = 7.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AudioNeonMagenta
+                                    )
+                                    Slider(
+                                        value = localVolRight,
+                                        onValueChange = {
+                                            localVolRight = it
+                                            serviceInstance?.volumeRight = it
+                                        },
+                                        valueRange = 0f..1f,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = AudioNeonGreen,
+                                            activeTrackColor = AudioNeonGreen,
+                                            inactiveTrackColor = Color(0x1Fffffff)
+                                        ),
+                                        modifier = Modifier
+                                            .height(16.dp)
+                                            .fillMaxWidth()
+                                            .testTag("slider_vol_right")
+                                    )
+                                }
                             }
                         }
                     }

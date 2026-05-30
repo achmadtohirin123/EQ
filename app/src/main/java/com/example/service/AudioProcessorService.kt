@@ -105,6 +105,17 @@ class AudioProcessorService : Service() {
             }
         }
 
+    // Independent Left and Right volume sliders
+    var volumeLeft = 1.0f
+        set(value) {
+            field = value.coerceIn(0f, 1f)
+        }
+
+    var volumeRight = 1.0f
+        set(value) {
+            field = value.coerceIn(0f, 1f)
+        }
+
     // Live Metering data yang diekspos ke UI Compose pada 60FPS
     private val _vuLeft = MutableStateFlow(0f)
     val vuLeft = _vuLeft.asStateFlow()
@@ -349,10 +360,10 @@ class AudioProcessorService : Service() {
                                 if (abs(normal) > maxVal) maxVal = abs(normal)
                             }
                             val rms = sqrt(sum / waveform.size)
-                            _vuLeft.value = (rms * 2.2f).coerceIn(0f, 1f)
-                            _vuRight.value = (rms * 2.2f).coerceIn(0f, 1f)
-                            _clipLeft.value = maxVal >= 0.98f
-                            _clipRight.value = maxVal >= 0.98f
+                            _vuLeft.value = (rms * 2.2f * volumeLeft).coerceIn(0f, 1f)
+                            _vuRight.value = (rms * 2.2f * volumeRight).coerceIn(0f, 1f)
+                            _clipLeft.value = (maxVal >= 0.98f) && (volumeLeft > 0.05f)
+                            _clipRight.value = (maxVal >= 0.98f) && (volumeRight > 0.05f)
                         } else {
                             _vuLeft.value = 0f
                             _vuRight.value = 0f
@@ -377,36 +388,37 @@ class AudioProcessorService : Service() {
 
                             val newSpectrum = FloatArray(31)
                             val prevSpectrum = _spectrumData.value
+                            val maxVolFactor = maxOf(volumeLeft, volumeRight)
+
                             for (vBand in 0 until 31) {
                                 val centerFreq = eqFrequencies[vBand]
-                                val lowerFreq = if (vBand == 0) centerFreq * 0.8f else (centerFreq + eqFrequencies[vBand - 1]) / 2f
-                                val upperFreq = if (vBand == 30) centerFreq * 1.2f else (centerFreq + eqFrequencies[vBand + 1]) / 2f
+                                
+                                // Dynamic center bin selection
+                                val centerBin = (centerFreq * n / samplingRateHz).toInt().coerceIn(1, n / 2 - 1)
+                                
+                                // Average adjacent bins to smooth noise and gain an organic musical flow
+                                val leftBin = (centerBin - 1).coerceAtLeast(1)
+                                val rightBin = (centerBin + 1).coerceAtMost(n / 2 - 1)
+                                val energy = (magnitudes[leftBin] + magnitudes[centerBin] + magnitudes[rightBin]) / 3f
+                                
+                                // Convert to decibel volume scale (dB) for maximum reality matching human ear
+                                val dbOffset = 20.0 * log10((energy + 1e-4) / 128.0)
+                                // Standard DAW DB scale ranges from -38 dB (quiet) to 0 dB (loud). Map that to 0.01..1.0
+                                val targetFraction = ((dbOffset + 38.0) / 38.0).toFloat().coerceIn(0.01f, 1.0f)
 
-                                val lowerBin = (lowerFreq * n / samplingRateHz).toInt().coerceIn(0, n / 2)
-                                val upperBin = (upperFreq * n / samplingRateHz).toInt().coerceIn(0, n / 2)
+                                // Dynamic weight compensation for higher bands (since physics naturally dampens high frequency energies)
+                                val freqWeight = 1.0f + (vBand.toFloat() * 0.035f)
+                                val weightedTarget = targetFraction * freqWeight * maxVolFactor
 
-                                var acc = 0f
-                                var count = 0
-                                for (bin in lowerBin..upperBin) {
-                                    acc += magnitudes[bin]
-                                    count++
-                                }
-
-                                val rawEnergy = if (count > 0) acc / count else {
-                                    val closestBin = (centerFreq * n / samplingRateHz).toInt().coerceIn(0, n / 2)
-                                    magnitudes[closestBin]
-                                }
-
-                                // Ubah ke skala visual DAW yang responsif & meluruh halus
                                 val previousVal = if (vBand < prevSpectrum.size) prevSpectrum[vBand] else 0f
-                                val targetEnergy = (rawEnergy / 128f) * 16.0f
-
-                                // Decay yang responsif (naik instan, turun mulus)
-                                val smoothed = if (targetEnergy > previousVal) {
-                                    targetEnergy.coerceIn(0f, 1f)
+                                val smoothed = if (weightedTarget > previousVal) {
+                                    // High response rise
+                                    (previousVal * 0.12f + weightedTarget * 0.88f)
+                                        .coerceIn(0f, 1f)
                                 } else {
-                                    // Decay rate halus (0.83) khas visualizer studio
-                                    (previousVal * 0.83f + targetEnergy * 0.17f).coerceIn(0f, 1f)
+                                    // Smooth analog visual decay
+                                    (previousVal * 0.81f + weightedTarget * 0.19f)
+                                        .coerceIn(0f, 1f)
                                 }
                                 newSpectrum[vBand] = smoothed
                             }
