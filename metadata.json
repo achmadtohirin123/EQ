@@ -1,0 +1,6 @@
+{
+  "name": "BRO EQ JOSSS",
+  "description": "Professional Android Equalizer, Real-time 60FPS Spectrum Analyzer, Dual VU Meter, 31-Band DSP Visual Equalizer, Master Compressor & Limiter, and Stereo Booster",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
