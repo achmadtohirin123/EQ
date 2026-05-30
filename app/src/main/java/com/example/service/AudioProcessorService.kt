@@ -145,6 +145,9 @@ class AudioProcessorService : Service() {
     private val _activePreset = MutableStateFlow<PresetEntity?>(null)
     val activePreset = _activePreset.asStateFlow()
 
+    private val _isEnginePlaying = MutableStateFlow(true)
+    val isEnginePlaying = _isEnginePlaying.asStateFlow()
+
     // Pengelolaan Audio Effects Android secara global / dinamis per-Audio Session
     private val activeEffects = java.util.concurrent.ConcurrentHashMap<Int, AudioEffectsGroup>()
     private var globalVisualizer: Visualizer? = null
@@ -179,6 +182,7 @@ class AudioProcessorService : Service() {
         
         // Atur agar signalGenerator dummy dianggap default true
         signalGenerator.isPlaying = true
+        _isEnginePlaying.value = true
         syncLocalAudioPlayback()
 
         // Inisialisasi Database
@@ -227,6 +231,7 @@ class AudioProcessorService : Service() {
         val action = intent?.action
         if (action == "TOGGLE_PLAYBACK" || action == "TOGGLE_ENGINE") {
             signalGenerator.isPlaying = !signalGenerator.isPlaying
+            _isEnginePlaying.value = signalGenerator.isPlaying
             // Terapkan keadaan aktif / nonaktif ke seluruh filter
             for (group in activeEffects.values) {
                 group.setEnabled(signalGenerator.isPlaying)

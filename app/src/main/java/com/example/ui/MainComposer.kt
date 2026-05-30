@@ -102,6 +102,7 @@ fun AudioProcessorDashboard() {
     val clipRight by (serviceInstance?.clipRight ?: MutableStateFlow(false)).collectAsStateWithLifecycle()
     
     val spectrumData by (serviceInstance?.spectrumData ?: MutableStateFlow(FloatArray(31) { 0f })).collectAsStateWithLifecycle()
+    val isEngineActive by (serviceInstance?.isEnginePlaying ?: MutableStateFlow(true)).collectAsStateWithLifecycle()
 
     // Membaca Preset dari Database Room
     val database = remember { AudioDatabase.getDatabase(context) }
@@ -325,7 +326,7 @@ fun AudioProcessorDashboard() {
                                     .size(8.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (serviceInstance?.signalGenerator?.isPlaying == true) {
+                                        if (isEngineActive) {
                                             AudioNeonGreen.copy(alpha = blinkAlpha)
                                         } else {
                                             Color.Gray
@@ -333,11 +334,11 @@ fun AudioProcessorDashboard() {
                                     )
                             )
                             Text(
-                                text = if (serviceInstance?.signalGenerator?.isPlaying == true) "ENG. ACTIVE" else "ENG. STANDBY",
+                                text = if (isEngineActive) "ENG. ACTIVE" else "ENG. STANDBY",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,
-                                color = if (serviceInstance?.signalGenerator?.isPlaying == true) AudioNeonGreen else Color.Gray
+                                color = if (isEngineActive) AudioNeonGreen else Color.Gray
                             )
                         }
                     }
@@ -366,7 +367,6 @@ fun AudioProcessorDashboard() {
                         }
 
                         // Tombol ON/OFF EQ Simpel: Aktif = Hijau, Nonaktif = Merah
-                        val isEngineActive = serviceInstance?.signalGenerator?.isPlaying == true
                         Button(
                             onClick = {
                                 serviceInstance?.let { service ->
