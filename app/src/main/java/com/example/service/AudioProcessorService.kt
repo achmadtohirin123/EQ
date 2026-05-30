@@ -76,6 +76,7 @@ class AudioProcessorService : Service() {
     var bassBoostDb = 0f
         set(value) {
             field = value
+            reconfigureSoftwareFilters()
             updateBassBoost()
             saveActivePresetStateToDbDebounced()
         }
@@ -133,48 +134,97 @@ class AudioProcessorService : Service() {
         }
 
     // --- DIGITAL CROSSOVER PRO 4-WAY CONFIGURATION ---
+    // Software DSP Filters
+    private val softwareEqFiltersLeft = Array(31) { BiquadFilter() }
+    private val softwareEqFiltersRight = Array(31) { BiquadFilter() }
+
+    private val softwareBassBoostLeft = BiquadFilter()
+    private val softwareBassBoostRight = BiquadFilter()
+
+    private val crossoverSubLpfLeft = BiquadFilter()
+    private val crossoverSubLpfRight = BiquadFilter()
+
+    private val crossoverLowHpfLeft = BiquadFilter()
+    private val crossoverLowHpfRight = BiquadFilter()
+    private val crossoverLowLpfLeft = BiquadFilter()
+    private val crossoverLowLpfRight = BiquadFilter()
+
+    private val crossoverMidHpfLeft = BiquadFilter()
+    private val crossoverMidHpfRight = BiquadFilter()
+    private val crossoverMidLpfLeft = BiquadFilter()
+    private val crossoverMidLpfRight = BiquadFilter()
+
+    private val crossoverHighHpfLeft = BiquadFilter()
+    private val crossoverHighHpfRight = BiquadFilter()
+
+    fun reconfigureSoftwareFilters() {
+        for (i in 0 until 31) {
+            softwareEqFiltersLeft[i].configurePeakingEQ(eqFrequencies[i], 1.414f, currentEqGains[i], 44100f)
+            softwareEqFiltersRight[i].configurePeakingEQ(eqFrequencies[i], 1.414f, currentEqGains[i], 44100f)
+        }
+
+        softwareBassBoostLeft.configurePeakingEQ(60f, 0.8f, bassBoostDb, 44100f)
+        softwareBassBoostRight.configurePeakingEQ(60f, 0.8f, bassBoostDb, 44100f)
+
+        crossoverSubLpfLeft.configureLowPass(crossoverSubLowHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverSubLpfRight.configureLowPass(crossoverSubLowHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+
+        crossoverLowHpfLeft.configureHighPass(crossoverSubLowHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverLowHpfRight.configureHighPass(crossoverSubLowHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverLowLpfLeft.configureLowPass(crossoverLowMidHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverLowLpfRight.configureLowPass(crossoverLowMidHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+
+        crossoverMidHpfLeft.configureHighPass(crossoverLowMidHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverMidHpfRight.configureHighPass(crossoverLowMidHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverMidLpfLeft.configureLowPass(crossoverMidHighHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverMidLpfRight.configureLowPass(crossoverMidHighHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+
+        crossoverHighHpfLeft.configureHighPass(crossoverMidHighHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+        crossoverHighHpfRight.configureHighPass(crossoverMidHighHz.coerceIn(20f, 20000f), 0.707f, 44100f)
+    }
+
     var crossoverSubLowHz = 80f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverLowMidHz = 250f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverMidHighHz = 3500f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
 
     var crossoverSubGain = 0f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverLowGain = 0f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverMidGain = 0f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverHighGain = 0f
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
 
     var crossoverSubMute = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverLowMute = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverMidMute = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverHighMute = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
 
     var crossoverSubSolo = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverLowSolo = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverMidSolo = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverHighSolo = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
 
     var crossoverSubInvert = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverLowInvert = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverMidInvert = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
     var crossoverHighInvert = false
-        set(value) { field = value; saveActivePresetStateToDbDebounced() }
+        set(value) { field = value; reconfigureSoftwareFilters(); saveActivePresetStateToDbDebounced() }
 
     // --- PROFESSIONAL AUDIO LIMITER CONFIGURATION ---
     var limiterThresholdDb = 0f
@@ -783,6 +833,7 @@ class AudioProcessorService : Service() {
 
     @Synchronized
     fun updateFiltersConfig() {
+        reconfigureSoftwareFilters()
         for (group in activeEffects.values) {
             group.equalizer?.let { applyEqToEqualizer(it) }
         }
@@ -1136,7 +1187,232 @@ class AudioProcessorService : Service() {
     }
 
     private fun startLocalAudioPlayback() {
-        // Dinonaktifkan total agar input audio diproses murni dari system/YouTube/Spotify saja
+        audioPlaybackJob?.cancel()
+        audioPlaybackJob = serviceScope.launch(Dispatchers.Default) {
+            val sampleRate = 44100
+            val minBufSize = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val bufferSize = maxOf(minBufSize, 4096)
+            
+            val audioTrack: AudioTrack
+            try {
+                audioTrack = AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build())
+                    .setAudioFormat(AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build())
+                    .setBufferSizeInBytes(bufferSize)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                return@launch
+            }
+
+            audioTrack.play()
+
+            val writeBuffer = ShortArray(1024)
+            val samplePair = FloatArray(2)
+            val tempPair = FloatArray(2)
+
+            reconfigureSoftwareFilters()
+
+            var rmsLeftAcc = 0f
+            var rmsRightAcc = 0f
+            var subValAcc = 0f
+            var lowValAcc = 0f
+            var midValAcc = 0f
+            var highValAcc = 0f
+            var frameCounter = 0
+            var maxGainReductionThisChunk = 0f
+
+            while (isActive && signalGenerator.isPlaying) {
+                val framesToWrite = writeBuffer.size / 2
+                maxGainReductionThisChunk = 0f
+
+                for (frame in 0 until framesToWrite) {
+                    signalGenerator.nextSample(samplePair)
+                    var sL = samplePair[0]
+                    var sR = samplePair[1]
+
+                    // Apply Custom 31-Band Equalizer in software (if enabled)
+                    if (isEqBlockEnabled) {
+                        for (i in 0 until 31) {
+                            sL = softwareEqFiltersLeft[i].processLeft(sL)
+                            sR = softwareEqFiltersRight[i].processRight(sR)
+                        }
+                    }
+
+                    // Apply Custom Bass Boost in software (if enabled)
+                    if (isBassBoostBlockEnabled) {
+                        sL = softwareBassBoostLeft.processLeft(sL)
+                        sR = softwareBassBoostRight.processRight(sR)
+                    }
+
+                    // Apply Spatial Stereo Image Widener
+                    if (isVirtualizerBlockEnabled) {
+                        stereoWidener.process(sL, sR, tempPair)
+                        sL = tempPair[0]
+                        sR = tempPair[1]
+                    }
+
+                    // Apply Digital Electronic 4-Way Crossover Filter Splitting
+                    val subL = crossoverSubLpfLeft.processLeft(sL)
+                    val subR = crossoverSubLpfRight.processRight(sR)
+
+                    val rawLowL = crossoverLowHpfLeft.processLeft(sL)
+                    val rawLowR = crossoverLowHpfRight.processRight(sR)
+                    val lowL = crossoverLowLpfLeft.processLeft(rawLowL)
+                    val lowR = crossoverLowLpfRight.processRight(rawLowR)
+
+                    val rawMidL = crossoverMidHpfLeft.processLeft(sL)
+                    val rawMidR = crossoverMidHpfRight.processRight(sR)
+                    val midL = crossoverMidLpfLeft.processLeft(rawMidL)
+                    val midR = crossoverMidLpfRight.processRight(rawMidR)
+
+                    val highL = crossoverHighHpfLeft.processLeft(sL)
+                    val highR = crossoverHighHpfRight.processRight(sR)
+
+                    val anySolo = crossoverSubSolo || crossoverLowSolo || crossoverMidSolo || crossoverHighSolo
+
+                    val factorSub = if (crossoverSubMute) 0f else (if (anySolo && !crossoverSubSolo) 0f else Math.pow(10.0, (crossoverSubGain / 20.0)).toFloat()) * (if (crossoverSubInvert) -1f else 1f)
+                    val factorLow = if (crossoverLowMute) 0f else (if (anySolo && !crossoverLowSolo) 0f else Math.pow(10.0, (crossoverLowGain / 20.0)).toFloat()) * (if (crossoverLowInvert) -1f else 1f)
+                    val factorMid = if (crossoverMidMute) 0f else (if (anySolo && !crossoverMidSolo) 0f else Math.pow(10.0, (crossoverMidGain / 20.0)).toFloat()) * (if (crossoverMidInvert) -1f else 1f)
+                    val factorHigh = if (crossoverHighMute) 0f else (if (anySolo && !crossoverHighSolo) 0f else Math.pow(10.0, (crossoverHighGain / 20.0)).toFloat()) * (if (crossoverHighInvert) -1f else 1f)
+
+                    val outSubL = subL * factorSub
+                    val outSubR = subR * factorSub
+
+                    val outLowL = lowL * factorLow
+                    val outLowR = lowR * factorLow
+
+                    val outMidL = midL * factorMid
+                    val outMidR = midR * factorMid
+
+                    val outHighL = highL * factorHigh
+                    val outHighR = highR * factorHigh
+
+                    var mixedL = outSubL + outLowL + outMidL + outHighL
+                    var mixedR = outSubR + outLowR + outMidR + outHighR
+
+                    mixedL *= volumeLeft
+                    mixedR *= volumeRight
+
+                    // Professional Master Compressor & brickwall limiter model
+                    val maxS = maxOf(abs(mixedL), abs(mixedR))
+                    val limitThresholdLinear = Math.pow(10.0, (limiterThresholdDb / 20.0)).toFloat()
+                    val limitCeilingLinear = Math.pow(10.0, (limiterCeilingDb / 20.0)).toFloat()
+
+                    var limitingGain = 1.0f
+                    if (isLimiterEnabled && maxS > limitThresholdLinear && limitThresholdLinear > 1e-4f) {
+                        val excess = maxS / limitThresholdLinear
+                        val kneeFactor = if (limiterKneeDb > 0.05f) {
+                            val rawKnee = (20f * log10(maxS / limitThresholdLinear)).coerceIn(0f, limiterKneeDb)
+                            1f - 0.5f * (rawKnee / limiterKneeDb)
+                        } else {
+                            1f
+                        }
+                        limitingGain = (1.0f / excess) * kneeFactor
+                        limitingGain = limitingGain.coerceIn(0.001f, 1f)
+
+                        val reductionDb = 20f * log10(1f / limitingGain)
+                        if (reductionDb > maxGainReductionThisChunk) {
+                            maxGainReductionThisChunk = reductionDb
+                        }
+                    }
+
+                    mixedL *= limitingGain
+                    mixedR *= limitingGain
+
+                    // Output Ceiling limiting
+                    val finalMax = maxOf(abs(mixedL), abs(mixedR))
+                    if (finalMax > limitCeilingLinear && finalMax > 1e-4f) {
+                        val clampMultiplier = limitCeilingLinear / finalMax
+                        mixedL *= clampMultiplier
+                        mixedR *= clampMultiplier
+                    }
+
+                    rmsLeftAcc += mixedL * mixedL
+                    rmsRightAcc += mixedR * mixedR
+                    subValAcc += (outSubL * outSubL + outSubR * outSubR) * 0.5f
+                    lowValAcc += (outLowL * outLowL + outLowR * outLowR) * 0.5f
+                    midValAcc += (outMidL * outMidL + outMidR * outMidR) * 0.5f
+                    highValAcc += (outHighL * outHighL + outHighR * outHighR) * 0.5f
+                    frameCounter++
+
+                    val sample16L = (mixedL * 32767f).coerceIn(-32768f, 32767f).toInt().toShort()
+                    val sample16R = (mixedR * 32767f).coerceIn(-32768f, 32767f).toInt().toShort()
+
+                    writeBuffer[frame * 2] = sample16L
+                    writeBuffer[frame * 2 + 1] = sample16R
+                }
+
+                audioTrack.write(writeBuffer, 0, writeBuffer.size)
+
+                if (frameCounter >= 100) {
+                    val finalRmsL = sqrt(rmsLeftAcc / frameCounter)
+                    val finalRmsR = sqrt(rmsRightAcc / frameCounter)
+                    
+                    val bSub = sqrt(subValAcc / frameCounter)
+                    val bLow = sqrt(lowValAcc / frameCounter)
+                    val bMid = sqrt(midValAcc / frameCounter)
+                    val bHigh = sqrt(highValAcc / frameCounter)
+
+                    _vuLeft.value = (finalRmsL * 2.2f).coerceIn(0f, 1f)
+                    _vuRight.value = (finalRmsR * 2.2f).coerceIn(0f, 1f)
+                    _clipLeft.value = finalRmsL >= 0.95f
+                    _clipRight.value = finalRmsR >= 0.95f
+
+                    _crossoverSubLevel.value = (bSub * 2.8f).coerceIn(0f, 1f)
+                    _crossoverLowLevel.value = (bLow * 2.8f).coerceIn(0f, 1f)
+                    _crossoverMidLevel.value = (bMid * 2.8f).coerceIn(0f, 1f)
+                    _crossoverHighLevel.value = (bHigh * 2.8f).coerceIn(0f, 1f)
+
+                    val currentGR = _limiterGainReduction.value
+                    val targetGR = maxGainReductionThisChunk
+                    val smoothing = if (targetGR > currentGR) 0.15f else 0.85f
+                    _limiterGainReduction.value = currentGR * smoothing + targetGR * (1f - smoothing)
+
+                    val specData = FloatArray(31)
+                    val prevSpectrum = _spectrumData.value
+                    for (i in 0 until 31) {
+                        val freq = eqFrequencies[i]
+                        val bandLevel = when {
+                            freq < crossoverSubLowHz -> bSub * 2.0f
+                            freq < crossoverLowMidHz -> bLow * 2.4f
+                            freq < crossoverMidHighHz -> bMid * 2.4f
+                            else -> bHigh * 2.0f
+                        }
+                        val finalSpec = (bandLevel * (1f + 0.1f * sin(i.toFloat()))).coerceIn(0.01f, 1.0f)
+                        specData[i] = prevSpectrum[i] * 0.7f + finalSpec * 0.3f
+                    }
+                    _spectrumData.value = specData
+
+                    rmsLeftAcc = 0f
+                    rmsRightAcc = 0f
+                    subValAcc = 0f
+                    lowValAcc = 0f
+                    midValAcc = 0f
+                    highValAcc = 0f
+                    frameCounter = 0
+                }
+            }
+
+            try {
+                audioTrack.stop()
+                audioTrack.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun stopLocalAudioPlayback() {

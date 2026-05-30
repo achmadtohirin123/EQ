@@ -84,6 +84,60 @@ class BiquadFilter {
     }
 
     /**
+     * Mengatur koefisien untuk Low-Pass Filter (LPF).
+     */
+    fun configureLowPass(cutoffFreq: Float, resonanceQ: Float, sampleRate: Float) {
+        this.frequency = cutoffFreq
+        this.q = if (resonanceQ < 0.1f) 0.1f else resonanceQ
+        this.gainDb = 0f
+
+        val fs = sampleRate
+        val w0 = (2.0 * Math.PI * cutoffFreq / fs).toFloat()
+        val alpha = (sin(w0) / (2.0 * q)).toFloat()
+        val cosW0 = cos(w0)
+
+        val b0_raw = (1f - cosW0) / 2f
+         val b1_raw = 1f - cosW0
+         val b2_raw = (1f - cosW0) / 2f
+         val a0_raw = 1f + alpha
+         val a1_raw = -2f * cosW0
+         val a2_raw = 1f - alpha
+
+        b0 = b0_raw / a0_raw
+        b1 = b1_raw / a0_raw
+        b2 = b2_raw / a0_raw
+        a1 = a1_raw / a0_raw
+        a2 = a2_raw / a0_raw
+    }
+
+    /**
+     * Mengatur koefisien untuk High-Pass Filter (HPF).
+     */
+    fun configureHighPass(cutoffFreq: Float, resonanceQ: Float, sampleRate: Float) {
+        this.frequency = cutoffFreq
+        this.q = if (resonanceQ < 0.1f) 0.1f else resonanceQ
+        this.gainDb = 0f
+
+        val fs = sampleRate
+        val w0 = (2.0 * Math.PI * cutoffFreq / fs).toFloat()
+        val alpha = (sin(w0) / (2.0 * q)).toFloat()
+        val cosW0 = cos(w0)
+
+        val b0_raw = (1f + cosW0) / 2f
+        val b1_raw = -(1f + cosW0)
+        val b2_raw = (1f + cosW0) / 2f
+        val a0_raw = 1f + alpha
+        val a1_raw = -2f * cosW0
+        val a2_raw = 1f - alpha
+
+        b0 = b0_raw / a0_raw
+        b1 = b1_raw / a0_raw
+        b2 = b2_raw / a0_raw
+        a1 = a1_raw / a0_raw
+        a2 = a2_raw / a0_raw
+    }
+
+    /**
      * Memproses satu sample audio untuk channel Kiri (Left).
      * Fungsi inline berkinerja tinggi, bebas alokasi memori.
      */
