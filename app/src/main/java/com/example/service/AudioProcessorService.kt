@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
+import kotlin.math.log10
+import kotlin.math.exp
 
 /**
  * Android Foreground Service untuk Mengelola Engine Pemrosesan Audio (DSP) System-Wide.
@@ -68,6 +70,39 @@ class AudioProcessorService : Service() {
         set(value) {
             field = value
             updateBassBoost()
+        }
+
+    // Blok Module Bypass Pengaturan
+    var isEqBlockEnabled = true
+        set(value) {
+            field = value
+            for (group in activeEffects.values) {
+                try { group.equalizer?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
+            }
+        }
+
+    var isBassBoostBlockEnabled = true
+        set(value) {
+            field = value
+            for (group in activeEffects.values) {
+                try { group.bassBoost?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
+            }
+        }
+
+    var isVirtualizerBlockEnabled = true
+        set(value) {
+            field = value
+            for (group in activeEffects.values) {
+                try { group.virtualizer?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
+            }
+        }
+
+    var isReverbBlockEnabled = true
+        set(value) {
+            field = value
+            for (group in activeEffects.values) {
+                try { group.presetReverb?.enabled = value && signalGenerator.isPlaying } catch (e: Exception) {}
+            }
         }
 
     // Live Metering data yang diekspos ke UI Compose pada 60FPS
@@ -246,7 +281,7 @@ class AudioProcessorService : Service() {
         // Inisialisasi Equalizer HP
         try {
             eq = Equalizer(0, sessionId).apply {
-                enabled = signalGenerator.isPlaying
+                enabled = isEqBlockEnabled && signalGenerator.isPlaying
             }
             applyEqToEqualizer(eq)
         } catch (e: Exception) {
@@ -256,7 +291,7 @@ class AudioProcessorService : Service() {
         // Inisialisasi Bass Boost HP
         try {
             bass = BassBoost(0, sessionId).apply {
-                enabled = signalGenerator.isPlaying
+                enabled = isBassBoostBlockEnabled && signalGenerator.isPlaying
             }
             applyBassToBassBoost(bass)
         } catch (e: Exception) {
@@ -266,7 +301,7 @@ class AudioProcessorService : Service() {
         // Inisialisasi Virtualizer (Stereo Widener) HP
         try {
             virt = Virtualizer(0, sessionId).apply {
-                enabled = signalGenerator.isPlaying
+                enabled = isVirtualizerBlockEnabled && signalGenerator.isPlaying
             }
             applyWidthToVirtualizer(virt)
         } catch (e: Exception) {
@@ -276,7 +311,7 @@ class AudioProcessorService : Service() {
         // Inisialisasi Preset Reverb HP
         try {
             reverb = PresetReverb(0, sessionId).apply {
-                enabled = signalGenerator.isPlaying
+                enabled = isReverbBlockEnabled && signalGenerator.isPlaying
             }
             applyReverbToPresetReverb(reverb)
         } catch (e: Exception) {
@@ -328,9 +363,12 @@ class AudioProcessorService : Service() {
 
                     override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         if (fft != null && signalGenerator.isPlaying) {
+                            val rawSampling = samplingRate.toFloat()
+                            val samplingRateHz = if (rawSampling > 1000000f) rawSampling / 1000f else rawSampling
                             val n = fft.size
-                            val magnitudes = FloatArray(n / 2)
+                            val magnitudes = FloatArray(n / 2 + 1)
                             magnitudes[0] = abs(fft[0].toFloat())
+                            magnitudes[n / 2] = abs(fft[1].toFloat())
                             for (i in 1 until n / 2) {
                                 val r = fft[2 * i].toFloat()
                                 val im = fft[2 * i + 1].toFloat()
@@ -338,21 +376,39 @@ class AudioProcessorService : Service() {
                             }
 
                             val newSpectrum = FloatArray(31)
-                            for (valBand in 0 until 31) {
-                                val targetFreq = eqFrequencies[valBand]
-                                val targetBin = (targetFreq / (samplingRate / (2f * n) * 1000f)).toInt().coerceIn(0, magnitudes.size - 1)
-                                
+                            val prevSpectrum = _spectrumData.value
+                            for (vBand in 0 until 31) {
+                                val centerFreq = eqFrequencies[vBand]
+                                val lowerFreq = if (vBand == 0) centerFreq * 0.8f else (centerFreq + eqFrequencies[vBand - 1]) / 2f
+                                val upperFreq = if (vBand == 30) centerFreq * 1.2f else (centerFreq + eqFrequencies[vBand + 1]) / 2f
+
+                                val lowerBin = (lowerFreq * n / samplingRateHz).toInt().coerceIn(0, n / 2)
+                                val upperBin = (upperFreq * n / samplingRateHz).toInt().coerceIn(0, n / 2)
+
                                 var acc = 0f
                                 var count = 0
-                                for (offset in -1..1) {
-                                    val idx = targetBin + offset
-                                    if (idx in magnitudes.indices) {
-                                        acc += magnitudes[idx]
-                                        count++
-                                    }
+                                for (bin in lowerBin..upperBin) {
+                                    acc += magnitudes[bin]
+                                    count++
                                 }
-                                val energy = if (count > 0) acc / count else 0f
-                                newSpectrum[valBand] = (energy / 128f) * 14.0f
+
+                                val rawEnergy = if (count > 0) acc / count else {
+                                    val closestBin = (centerFreq * n / samplingRateHz).toInt().coerceIn(0, n / 2)
+                                    magnitudes[closestBin]
+                                }
+
+                                // Ubah ke skala visual DAW yang responsif & meluruh halus
+                                val previousVal = if (vBand < prevSpectrum.size) prevSpectrum[vBand] else 0f
+                                val targetEnergy = (rawEnergy / 128f) * 16.0f
+
+                                // Decay yang responsif (naik instan, turun mulus)
+                                val smoothed = if (targetEnergy > previousVal) {
+                                    targetEnergy.coerceIn(0f, 1f)
+                                } else {
+                                    // Decay rate halus (0.83) khas visualizer studio
+                                    (previousVal * 0.83f + targetEnergy * 0.17f).coerceIn(0f, 1f)
+                                }
+                                newSpectrum[vBand] = smoothed
                             }
                             _spectrumData.value = newSpectrum
                         } else {
@@ -386,7 +442,7 @@ class AudioProcessorService : Service() {
         }
     }
 
-    // Fungsi pemetaan setelan slider EQ ke Equalizer bawaan Android
+    // Fungsi pemetaan setelan slider EQ ke Equalizer bawaan Android berbasis Gaussian Weighted Octave Difference
     private fun applyEqToEqualizer(equalizer: Equalizer) {
         try {
             val numBands = equalizer.numberOfBands.toInt()
@@ -396,19 +452,25 @@ class AudioProcessorService : Service() {
 
             for (band in 0 until numBands) {
                 val centerFreqHz = equalizer.getCenterFreq(band.toShort()) / 1000f
-                
-                var closestIndex = 0
-                var minDiff = Float.MAX_VALUE
+
+                var weightedSum = 0f
+                var totalWeight = 0f
+
                 for (i in 0 until 31) {
-                    val diff = abs(eqFrequencies[i] - centerFreqHz)
-                    if (diff < minDiff) {
-                        minDiff = diff
-                        closestIndex = i
+                    val sliderFreq = eqFrequencies[i]
+                    // Octave logarithmic distance
+                    val octaveDiff = abs(log10(sliderFreq / centerFreqHz))
+                    // Gaussian curve with standard band deviation (0.45 octave) to weight neighboring bands
+                    val weight = exp(-(octaveDiff * octaveDiff) / (2f * 0.45f * 0.45f))
+
+                    if (weight > 0.01f) {
+                        weightedSum += currentEqGains[i] * weight
+                        totalWeight += weight
                     }
                 }
-                
-                val gainDb = currentEqGains[closestIndex]
-                val levelMb = (gainDb * 100).toInt().coerceIn(minLevel.toInt(), maxLevel.toInt())
+
+                val targetGainDb = if (totalWeight > 0f) weightedSum / totalWeight else 0f
+                val levelMb = (targetGainDb * 100).toInt().coerceIn(minLevel.toInt(), maxLevel.toInt())
                 equalizer.setBandLevel(band.toShort(), levelMb.toShort())
             }
         } catch (e: Exception) {

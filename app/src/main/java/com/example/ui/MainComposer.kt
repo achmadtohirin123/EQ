@@ -12,6 +12,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -113,6 +114,44 @@ fun AudioProcessorDashboard() {
     var newPresetName by remember { mutableStateOf("") }
     var eqBandResolution by remember { mutableStateOf(1) } // 0 = 31 Band (Pro), 1 = 15 Band (Medium), 2 = 7 Band (Simpel)
 
+    // State Sliders Lokal untuk Kecepatan Respon 60FPS Instan Tanpa Lag
+    val localEqGains = remember { mutableStateListOf<Float>().apply { addAll(List(31) { 0f }) } }
+    var localThreshold by remember { mutableStateOf(-12f) }
+    var localRatio by remember { mutableStateOf(4f) }
+    var localAttack by remember { mutableStateOf(10f) }
+    var localRelease by remember { mutableStateOf(100f) }
+    var localMakeup by remember { mutableStateOf(0f) }
+    
+    var localSubBassBoost by remember { mutableStateOf(0f) }
+    var localStereoWidth by remember { mutableStateOf(1f) }
+    var localReverbLevel by remember { mutableStateOf(0f) }
+
+    // State Menu Settings Global
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var optLimitBypass by remember { mutableStateOf(false) }
+    var optHighResFft by remember { mutableStateOf(true) }
+    var optStereoBypass by remember { mutableStateOf(false) }
+
+    // Sinkronisasi otomatis saat preset aktif berubah di database/service
+    LaunchedEffect(activePreset, serviceInstance) {
+        serviceInstance?.let { service ->
+            val gains = service.getEqGains()
+            gains.forEachIndexed { index, value ->
+                if (index < localEqGains.size) {
+                    localEqGains[index] = value
+                }
+            }
+            localThreshold = service.getCompressorThreshold()
+            localRatio = service.getCompressorRatio()
+            localAttack = service.getCompressorAttack()
+            localRelease = service.getCompressorRelease()
+            localMakeup = service.getCompressorMakeup()
+            localSubBassBoost = service.bassBoostDb
+            localStereoWidth = service.getStereoWidth()
+            localReverbLevel = service.getReverbLevel()
+        }
+    }
+
     // Logika Request Perizinan Android (Sesuai Syarat No. 4 Metadata)
     val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
@@ -169,7 +208,7 @@ fun AudioProcessorDashboard() {
             ) {
                 Column {
                     Text(
-                        text = "BRO EQ JOSSS",
+                        text = "BRO EQ JOSJIS",
                         fontWeight = FontWeight.Black,
                         fontSize = 28.sp,
                         fontFamily = FontFamily.Monospace,
@@ -186,48 +225,71 @@ fun AudioProcessorDashboard() {
                     )
                 }
 
-                // Indikator Status Aktif
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0x1F00E5FF))
-                        .border(1.dp, Color(0x3300E5FF), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    // Tombol Setelan Gear Profesional
+                    IconButton(
+                        onClick = { showSettingsDialog = true },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x1A00E5FF))
+                            .border(1.dp, Color(0x3300E5FF), CircleShape)
+                            .testTag("button_settings")
                     ) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                        val blinkAlpha by infiniteTransition.animateFloat(
-                            initialValue = 0.3f,
-                            targetValue = 1.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1000, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "blink"
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Menu Pengaturan",
+                            tint = AudioNeonCyan,
+                            modifier = Modifier.size(20.dp)
                         )
-                        
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (serviceInstance?.signalGenerator?.isPlaying == true) {
-                                        AudioNeonGreen.copy(alpha = blinkAlpha)
-                                    } else {
-                                        Color.Gray
-                                    }
-                                )
-                        )
-                        Text(
-                            text = if (serviceInstance?.signalGenerator?.isPlaying == true) "ENG. ACTIVE" else "ENG. STANDBY",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (serviceInstance?.signalGenerator?.isPlaying == true) AudioNeonGreen else Color.Gray
-                        )
+                    }
+
+                    // Indikator Status Aktif
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x1F00E5FF))
+                            .border(1.dp, Color(0x3300E5FF), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                            val blinkAlpha by infiniteTransition.animateFloat(
+                                initialValue = 0.3f,
+                                targetValue = 1.0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1000, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "blink"
+                            )
+                            
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (serviceInstance?.signalGenerator?.isPlaying == true) {
+                                            AudioNeonGreen.copy(alpha = blinkAlpha)
+                                        } else {
+                                            Color.Gray
+                                        }
+                                    )
+                            )
+                            Text(
+                                text = if (serviceInstance?.signalGenerator?.isPlaying == true) "ENG. ACTIVE" else "ENG. STANDBY",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (serviceInstance?.signalGenerator?.isPlaying == true) AudioNeonGreen else Color.Gray
+                            )
+                        }
                     }
                 }
             }            // 2. INPUT DRAWER & GLOBAL AUDIO FILTER PANEL
@@ -669,9 +731,6 @@ fun AudioProcessorDashboard() {
                             }
                         }
 
-                        // Tampilkan Sliders Slider EQ sesuai Filter Resolusi
-                        val fullGains = serviceInstance?.getEqGains() ?: FloatArray(31) { 0f }
-                        
                         // Pemetaan indeks berdasarkan resolusi
                         val activeIndexes = when (eqBandResolution) {
                             2 -> (0..30).toList() // Tampilkan semua 31 band
@@ -692,19 +751,27 @@ fun AudioProcessorDashboard() {
                             ) {
                                 activeIndexes.forEach { bandIdx ->
                                     val fHz = serviceInstance?.eqFrequencies?.get(bandIdx) ?: 1000f
-                                    val dbValue = if (bandIdx < fullGains.size) fullGains[bandIdx] else 0f
+                                    val dbValue = if (bandIdx < localEqGains.size) localEqGains[bandIdx] else 0f
                                     
                                     VerticalEqSlider(
                                         label = formatFreq(fHz),
                                         value = dbValue,
                                         onValueChange = { newValue ->
+                                            localEqGains[bandIdx] = newValue
                                             if (serviceInstance != null) {
                                                 if (eqBandResolution == 2) {
-                                                    // Ubah satu band tunggal
+                                                    // Ubah satu band tunggal secara instan
                                                     serviceInstance?.updateSingleEqBand(bandIdx, newValue)
                                                 } else {
                                                     // Interpolasi bell-curve menyebar ke samping band tetangga agar kurva EQ melandai natural
                                                     applyBellCurveInterpolation(serviceInstance!!, bandIdx, newValue)
+                                                    // Sinkronisasi lokal kembali setelah bell-curve interpolation
+                                                    val updatedGains = serviceInstance?.getEqGains() ?: FloatArray(31) { 0f }
+                                                    updatedGains.forEachIndexed { idx, valDb ->
+                                                        if (idx < localEqGains.size) {
+                                                            localEqGains[idx] = valDb
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -716,12 +783,6 @@ fun AudioProcessorDashboard() {
                 }
                 1 -> {
                     // TAB KOMPRESOR MASTER DINAMIS (THRESHOLD, RATIO, ATTACK, MAKEUP, DLL)
-                    val thresh = serviceInstance?.getCompressorThreshold() ?: -12f
-                    val ratio = serviceInstance?.getCompressorRatio() ?: 4f
-                    val att = serviceInstance?.getCompressorAttack() ?: 10f
-                    val rel = serviceInstance?.getCompressorRelease() ?: 100f
-                    val makeup = serviceInstance?.getCompressorMakeup() ?: 0f
-
                     GlassCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(14.dp),
@@ -737,56 +798,67 @@ fun AudioProcessorDashboard() {
                             // Threshold
                             DoubleSliderWidget(
                                 label = "THRESHOLD",
-                                valueText = "${thresh.toInt()} dB",
-                                value = thresh,
+                                valueText = "${localThreshold.toInt()} dB",
+                                value = localThreshold,
                                 valueRange = -48f..0f,
-                                onValueChange = { serviceInstance?.updateCompressorThreshold(it) }
+                                onValueChange = {
+                                    localThreshold = it
+                                    serviceInstance?.updateCompressorThreshold(it)
+                                }
                             )
 
                             // Ratio
                             DoubleSliderWidget(
                                 label = "COMP. RATIO",
-                                valueText = String.format("%.1f:1", ratio),
-                                value = ratio,
+                                valueText = String.format("%.1f:1", localRatio),
+                                value = localRatio,
                                 valueRange = 1f..12f,
-                                onValueChange = { serviceInstance?.updateCompressorRatio(it) }
+                                onValueChange = {
+                                    localRatio = it
+                                    serviceInstance?.updateCompressorRatio(it)
+                                }
                             )
 
                             // Attack
                             DoubleSliderWidget(
                                 label = "ATTACK TIME",
-                                valueText = "${att.toInt()} ms",
-                                value = att,
+                                valueText = "${localAttack.toInt()} ms",
+                                value = localAttack,
                                 valueRange = 1f..150f,
-                                onValueChange = { serviceInstance?.updateCompressorAttack(it) }
+                                onValueChange = {
+                                    localAttack = it
+                                    serviceInstance?.updateCompressorAttack(it)
+                                }
                             )
 
                             // Release
                             DoubleSliderWidget(
                                 label = "RELEASE TIME",
-                                valueText = "${rel.toInt()} ms",
-                                value = rel,
+                                valueText = "${localRelease.toInt()} ms",
+                                value = localRelease,
                                 valueRange = 20f..500f,
-                                onValueChange = { serviceInstance?.updateCompressorRelease(it) }
+                                onValueChange = {
+                                    localRelease = it
+                                    serviceInstance?.updateCompressorRelease(it)
+                                }
                             )
 
                             // Makeup
                             DoubleSliderWidget(
                                 label = "MAKEUP GAIN",
-                                valueText = String.format("+%.1f dB", makeup),
-                                value = makeup,
+                                valueText = String.format("+%.1f dB", localMakeup),
+                                value = localMakeup,
                                 valueRange = 0f..16f,
-                                onValueChange = { serviceInstance?.updateCompressorMakeup(it) }
+                                onValueChange = {
+                                    localMakeup = it
+                                    serviceInstance?.updateCompressorMakeup(it)
+                                }
                             )
                         }
                     }
                 }
                 2 -> {
                     // TAB EFEK SPASIAL (STEREO WIDENER, REVERB, SUBHARMONIC BASS)
-                    val widthVal = serviceInstance?.getStereoWidth() ?: 1.0f
-                    val bassVal = serviceInstance?.bassBoostDb ?: 0.0f
-                    val reverbVal = serviceInstance?.getReverbLevel() ?: 0.0f
-
                     GlassCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(14.dp),
@@ -802,32 +874,41 @@ fun AudioProcessorDashboard() {
                             // Subharmonic Bass Booster
                             DoubleSliderWidget(
                                 label = "SUBHARMONIC BASS BOOSTER 🔊",
-                                valueText = String.format("+%.1f dB", bassVal),
-                                value = bassVal,
+                                valueText = String.format("+%.1f dB", localSubBassBoost),
+                                value = localSubBassBoost,
                                 valueRange = 0f..12f,
-                                onValueChange = { serviceInstance?.bassBoostDb = it }
+                                onValueChange = {
+                                    localSubBassBoost = it
+                                    serviceInstance?.bassBoostDb = it
+                                }
                             )
 
                             // Stereo Widener
                             DoubleSliderWidget(
                                 label = "STEREO IMAGE WIDENER 🗺️",
                                 valueText = when {
-                                    widthVal < 0.1f -> "MONO MURNI"
-                                    widthVal <= 1.0f -> String.format("%.0f%% (Normal)", widthVal * 100f)
-                                    else -> String.format("%.0f%% (Ultra Wide)", widthVal * 100f)
+                                    localStereoWidth < 0.1f -> "MONO MURNI"
+                                    localStereoWidth <= 1.0f -> String.format("%.0f%% (Normal)", localStereoWidth * 100f)
+                                    else -> String.format("%.0f%% (Ultra Wide)", localStereoWidth * 100f)
                                 },
-                                value = widthVal,
+                                value = localStereoWidth,
                                 valueRange = 0f..2.5f,
-                                onValueChange = { serviceInstance?.updateStereoWidth(it) }
+                                onValueChange = {
+                                    localStereoWidth = it
+                                    serviceInstance?.updateStereoWidth(it)
+                                }
                             )
 
                             // 3D Reverb
                             DoubleSliderWidget(
                                 label = "3D SPACE REVERB GEMA 🕌",
-                                valueText = String.format("%.0f%% Wet", reverbVal * 100f),
-                                value = reverbVal,
+                                valueText = String.format("%.0f%% Wet", localReverbLevel * 100f),
+                                value = localReverbLevel,
                                 valueRange = 0f..0.85f,
-                                onValueChange = { serviceInstance?.updateReverbLevel(it) }
+                                onValueChange = {
+                                    localReverbLevel = it
+                                    serviceInstance?.updateReverbLevel(it)
+                                }
                             )
                         }
                     }
@@ -873,6 +954,164 @@ fun AudioProcessorDashboard() {
             dismissButton = {
                 TextButton(onClick = { showPresetDialog = false }) {
                     Text("BATAL", color = Color.Gray)
+                }
+            },
+            containerColor = AudioDbSurface
+        )
+    }
+
+    // Dialog Pengaturan Modular System PRO (Mengaktifkan/Menonaktifkan modul dsp yang ada sesuka hati)
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(imageVector = Icons.Default.Settings, contentDescription = null, tint = AudioNeonCyan)
+                    Text("PENGATURAN SYSTEM PRO 🎛️", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "Kontrol modular sistem pemrosesan dsp hardware. Anda bisa mengaktifkan atau menonaktifkan rak menu dsp bawaan individual sesuka Anda.",
+                        fontSize = 11.sp,
+                        color = AudioTextSecondary,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+
+                    // 1. EQUALIZER SWITCH
+                    var eqState = serviceInstance?.isEqBlockEnabled ?: true
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10111A))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("MODUL EQUALIZER 31-BAND", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Aktifkan penyesuaian gain frekuensi", fontSize = 9.sp, color = AudioTextSecondary)
+                        }
+                        Switch(
+                            checked = eqState,
+                            onCheckedChange = { serviceInstance?.isEqBlockEnabled = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AudioNeonCyan,
+                                checkedTrackColor = Color(0x3300E5FF)
+                            )
+                        )
+                    }
+
+                    // 2. BASS BOOST SWITCH
+                    var bassState = serviceInstance?.isBassBoostBlockEnabled ?: true
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10111A))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("SUBHARMONIC BASS BOOSTER", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Aktifkan hentakan tendangan bass", fontSize = 9.sp, color = AudioTextSecondary)
+                        }
+                        Switch(
+                            checked = bassState,
+                            onCheckedChange = { serviceInstance?.isBassBoostBlockEnabled = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AudioNeonCyan,
+                                checkedTrackColor = Color(0x3300E5FF)
+                            )
+                        )
+                    }
+
+                    // 3. STEREO WIDENER SWITCH
+                    var stereoState = serviceInstance?.isVirtualizerBlockEnabled ?: true
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10111A))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("STEREO IMAGE WIDENER", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Aktifkan efek ruang stereo lebar", fontSize = 9.sp, color = AudioTextSecondary)
+                        }
+                        Switch(
+                            checked = stereoState,
+                            onCheckedChange = { serviceInstance?.isVirtualizerBlockEnabled = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AudioNeonCyan,
+                                checkedTrackColor = Color(0x3300E5FF)
+                            )
+                        )
+                    }
+
+                    // 4. REVERB SWITCH
+                    var reverbState = serviceInstance?.isReverbBlockEnabled ?: true
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10111A))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("3D SPACE REVERB GEMA", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Aktifkan ruang pantulan gema akustik", fontSize = 9.sp, color = AudioTextSecondary)
+                        }
+                        Switch(
+                            checked = reverbState,
+                            onCheckedChange = { serviceInstance?.isReverbBlockEnabled = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AudioNeonCyan,
+                                checkedTrackColor = Color(0x3300E5FF)
+                            )
+                        )
+                    }
+
+                    // 5. SAMPLE AUDIO SPEED LATENCY
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10111A))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("LATENSI BUFFER MINIMUM", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Bypass antrean buffer untuk latensi ultra rendah", fontSize = 9.sp, color = AudioTextSecondary)
+                        }
+                        Switch(
+                            checked = optLimitBypass,
+                            onCheckedChange = { optLimitBypass = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AudioNeonCyan,
+                                checkedTrackColor = Color(0x3300E5FF)
+                            )
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSettingsDialog = false }) {
+                    Text("OK", color = AudioNeonCyan, fontWeight = FontWeight.Bold)
                 }
             },
             containerColor = AudioDbSurface
@@ -982,18 +1221,38 @@ fun VerticalEqSlider(
                 .background(Color(0xFF0F1018))
                 .border(1.dp, Color(0x1Fffffff), RoundedCornerShape(8.dp))
                 .pointerInput(Unit) {
-                    detectDragGestures { change, _ ->
-                        change.consume()
-                        // Hitung ratio tinggi letak sentuh
-                        val positionY = change.position.y
+                    detectTapGestures { offset ->
+                        val positionY = offset.y
                         val containerHeight = size.height
                         if (containerHeight > 0) {
                             val fraction = 1f - (positionY / containerHeight).coerceIn(0f, 1f)
-                            // Petakan balik fraction [0, 1] ke gain [-12, +12]
                             val mappedDb = (fraction * 24f) - 12f
                             onValueChange(mappedDb)
                         }
                     }
+                }
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val positionY = offset.y
+                            val containerHeight = size.height
+                            if (containerHeight > 0) {
+                                val fraction = 1f - (positionY / containerHeight).coerceIn(0f, 1f)
+                                val mappedDb = (fraction * 24f) - 12f
+                                onValueChange(mappedDb)
+                            }
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            val positionY = change.position.y
+                            val containerHeight = size.height
+                            if (containerHeight > 0) {
+                                val fraction = 1f - (positionY / containerHeight).coerceIn(0f, 1f)
+                                val mappedDb = (fraction * 24f) - 12f
+                                onValueChange(mappedDb)
+                            }
+                        }
+                    )
                 },
             contentAlignment = Alignment.BottomCenter
         ) {
